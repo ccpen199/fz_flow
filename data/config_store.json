@@ -1,0 +1,504 @@
+{
+  "scenes": [
+    {
+      "scene_id": "92f91bccaf",
+      "name": "配置测试场景",
+      "description": "for smoke test",
+      "fields": [
+        {
+          "field_id": "4dc25c60ea04",
+          "table_name": "product_snapshot",
+          "field_name": "sale_price",
+          "semantic_name": "销售价",
+          "description": "用于价格分析",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "0845b788b14c",
+          "table_name": "",
+          "field_name": "",
+          "semantic_name": "",
+          "description": "",
+          "role": "dimension",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "60328264af6c",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "品牌维度关联"
+        },
+        {
+          "relation_id": "407280e5e8a1",
+          "left_table": "",
+          "left_field": "",
+          "right_table": "",
+          "right_field": "",
+          "join_type": "INNER",
+          "note": ""
+        },
+        {
+          "relation_id": "d115c2e2baa9",
+          "left_table": "",
+          "left_field": "",
+          "right_table": "",
+          "right_field": "",
+          "join_type": "INNER",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "scene_id": "394c191751",
+      "name": "竞品与价格分析",
+      "description": "围绕品牌/平台/品类/价格带做竞品价格结构与折扣趋势分析。",
+      "fields": [
+        {
+          "field_id": "be83e237a27d",
+          "table_name": "product_snapshot",
+          "field_name": "snapshot_date",
+          "semantic_name": "快照日期",
+          "description": "按天趋势分析时间轴",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "2b85c2ff27a5",
+          "table_name": "product_snapshot",
+          "field_name": "sale_price",
+          "semantic_name": "销售价",
+          "description": "分析实际成交价/促销价",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "4fb1ff2a371a",
+          "table_name": "product_snapshot",
+          "field_name": "listed_price",
+          "semantic_name": "吊牌价",
+          "description": "折扣口径基准价格",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "b91deb6c11f4",
+          "table_name": "dim_brand",
+          "field_name": "brand_name",
+          "semantic_name": "品牌",
+          "description": "品牌维度",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "c001956b2a42",
+          "table_name": "dim_platform",
+          "field_name": "platform_name",
+          "semantic_name": "平台",
+          "description": "平台维度",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "06b38990be6f",
+          "table_name": "dim_category",
+          "field_name": "category_name",
+          "semantic_name": "品类",
+          "description": "品类维度",
+          "role": "dimension",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "07dfee93b659",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "品牌维表关联"
+        },
+        {
+          "relation_id": "b95b0a8366cc",
+          "left_table": "product_snapshot",
+          "left_field": "platform_id",
+          "right_table": "dim_platform",
+          "right_field": "platform_id",
+          "join_type": "INNER",
+          "note": "平台维表关联"
+        },
+        {
+          "relation_id": "9b2d3fb6060f",
+          "left_table": "product_snapshot",
+          "left_field": "category_id",
+          "right_table": "dim_category",
+          "right_field": "category_id",
+          "join_type": "INNER",
+          "note": "品类维表关联"
+        },
+        {
+          "relation_id": "fe24c5bd247a",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "5638efd607d2",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "289c75790dc1",
+          "left_table": "product_snapshot",
+          "left_field": "platform_id",
+          "right_table": "dim_platform",
+          "right_field": "platform_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "857c26587e1a",
+          "left_table": "product_snapshot",
+          "left_field": "category_id",
+          "right_table": "dim_category",
+          "right_field": "category_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "7a83e36463d0",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "d12d8e933ec8",
+          "left_table": "product_snapshot",
+          "left_field": "platform_id",
+          "right_table": "dim_platform",
+          "right_field": "platform_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "0e27f92751d5",
+          "left_table": "product_snapshot",
+          "left_field": "category_id",
+          "right_table": "dim_category",
+          "right_field": "category_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        }
+      ],
+      "sample_goals": [
+        "最近30天各品牌连衣裙的价格带分布如何？",
+        "哪些品牌近期在羽绒服品类的促销力度明显加大？",
+        "某平台中 Zara 与优衣库的外套价格结构差异是什么？",
+        "近60天各平台外套的平均折扣率变化趋势如何？"
+      ]
+    },
+    {
+      "scene_id": "420d9aea85",
+      "name": "商品结构分析",
+      "description": "分析品类结构、SKU丰富度、品牌和平台上的商品布局差异。",
+      "fields": [
+        {
+          "field_id": "f00316a397cc",
+          "table_name": "product_snapshot",
+          "field_name": "sku_id",
+          "semantic_name": "SKU",
+          "description": "用于统计SKU丰富度",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "16209c01a698",
+          "table_name": "product_snapshot",
+          "field_name": "stock_qty",
+          "semantic_name": "库存量",
+          "description": "可用于结构权重估计",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "91d9b40209f8",
+          "table_name": "dim_brand",
+          "field_name": "brand_name",
+          "semantic_name": "品牌",
+          "description": "品牌维度",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "9b02bee5dc10",
+          "table_name": "dim_platform",
+          "field_name": "platform_name",
+          "semantic_name": "平台",
+          "description": "平台维度",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "332536e105b7",
+          "table_name": "dim_category",
+          "field_name": "category_name",
+          "semantic_name": "品类",
+          "description": "品类维度",
+          "role": "dimension",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "1e025fc34a2a",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "品牌维表关联"
+        },
+        {
+          "relation_id": "497239d5dffb",
+          "left_table": "product_snapshot",
+          "left_field": "platform_id",
+          "right_table": "dim_platform",
+          "right_field": "platform_id",
+          "join_type": "INNER",
+          "note": "平台维表关联"
+        },
+        {
+          "relation_id": "f6217e6f1710",
+          "left_table": "product_snapshot",
+          "left_field": "category_id",
+          "right_table": "dim_category",
+          "right_field": "category_id",
+          "join_type": "INNER",
+          "note": "品类维表关联"
+        }
+      ],
+      "sample_goals": [
+        "某品牌女装商品结构是否过于集中？",
+        "哪些品牌在牛仔裤品类的 SKU 最丰富？",
+        "各平台春季新品的颜色结构有什么差异？",
+        "不同平台在外套品类的SKU结构差异如何？"
+      ]
+    },
+    {
+      "scene_id": "f99d3c7589",
+      "name": "趋势与爆款分析",
+      "description": "关注上新节奏、价格波动、异常变化和潜在爆款识别。",
+      "fields": [
+        {
+          "field_id": "eabfe55612c0",
+          "table_name": "product_snapshot",
+          "field_name": "snapshot_date",
+          "semantic_name": "快照日期",
+          "description": "趋势主时间轴",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "800fc0570c76",
+          "table_name": "product_snapshot",
+          "field_name": "is_new",
+          "semantic_name": "是否上新",
+          "description": "上新节奏分析标识",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "323e4ec8253c",
+          "table_name": "product_snapshot",
+          "field_name": "sale_price",
+          "semantic_name": "销售价",
+          "description": "波动分析核心指标",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "a7bdbbbe9b56",
+          "table_name": "product_snapshot",
+          "field_name": "sku_id",
+          "semantic_name": "SKU",
+          "description": "爆款候选统计单元",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "518dadaf27ee",
+          "table_name": "dim_brand",
+          "field_name": "brand_name",
+          "semantic_name": "品牌",
+          "description": "品牌维度",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "25cc0606554f",
+          "table_name": "dim_category",
+          "field_name": "category_name",
+          "semantic_name": "品类",
+          "description": "品类维度",
+          "role": "dimension",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "0f356c3a6914",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "品牌维表关联"
+        },
+        {
+          "relation_id": "ede207481b9d",
+          "left_table": "product_snapshot",
+          "left_field": "platform_id",
+          "right_table": "dim_platform",
+          "right_field": "platform_id",
+          "join_type": "INNER",
+          "note": "平台维表关联"
+        },
+        {
+          "relation_id": "dd6d7cb33a68",
+          "left_table": "product_snapshot",
+          "left_field": "category_id",
+          "right_table": "dim_category",
+          "right_field": "category_id",
+          "join_type": "INNER",
+          "note": "品类维表关联"
+        },
+        {
+          "relation_id": "04ef15085840",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "5695c0fb3364",
+          "left_table": "product_snapshot",
+          "left_field": "platform_id",
+          "right_table": "dim_platform",
+          "right_field": "platform_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        },
+        {
+          "relation_id": "024b0f971959",
+          "left_table": "product_snapshot",
+          "left_field": "category_id",
+          "right_table": "dim_category",
+          "right_field": "category_id",
+          "join_type": "INNER",
+          "note": "auto: 字段名一致且维表主键匹配"
+        }
+      ],
+      "sample_goals": [
+        "哪些品牌最近两周上新节奏明显加快？",
+        "哪些品牌最近60天价格波动最明显？",
+        "哪些品类在近30天出现异常变化？",
+        "近30天潜在爆款SKU有哪些，依据是什么？"
+      ]
+    },
+    {
+      "scene_id": "f2b68d5283",
+      "name": "商品价格分析",
+      "description": "对单品牌/多品牌在不同平台和时间窗口下的价格表现做总览。",
+      "fields": [
+        {
+          "field_id": "c808ff995a7c",
+          "table_name": "product_snapshot",
+          "field_name": "snapshot_date",
+          "semantic_name": "快照日期",
+          "description": "时间筛选",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "52474a60b096",
+          "table_name": "product_snapshot",
+          "field_name": "sale_price",
+          "semantic_name": "销售价",
+          "description": "核心价格指标",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "b3006152b240",
+          "table_name": "dim_brand",
+          "field_name": "brand_name",
+          "semantic_name": "品牌",
+          "description": "品牌维度",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "596421c674f1",
+          "table_name": "dim_platform",
+          "field_name": "platform_name",
+          "semantic_name": "平台",
+          "description": "平台维度",
+          "role": "dimension",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "ff326beb24db",
+          "left_table": "product_snapshot",
+          "left_field": "brand_id",
+          "right_table": "dim_brand",
+          "right_field": "brand_id",
+          "join_type": "INNER",
+          "note": "品牌维表关联"
+        },
+        {
+          "relation_id": "f2573fab6902",
+          "left_table": "product_snapshot",
+          "left_field": "platform_id",
+          "right_table": "dim_platform",
+          "right_field": "platform_id",
+          "join_type": "INNER",
+          "note": "平台维表关联"
+        },
+        {
+          "relation_id": "f17cab9df5a5",
+          "left_table": "product_snapshot",
+          "left_field": "category_id",
+          "right_table": "dim_category",
+          "right_field": "category_id",
+          "join_type": "INNER",
+          "note": "品类维表关联"
+        }
+      ],
+      "sample_goals": [
+        "最近30天女装外套在不同平台和品牌的价格结构变化如何？",
+        "某品牌在各平台的价格分布和折扣策略是否一致？",
+        "近14天平台维度下平均销售价变化趋势如何？"
+      ]
+    }
+  ]
+}

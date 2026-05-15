@@ -1,0 +1,58 @@
+.DS_Store
+**/.DS_Store
+
+# Python
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+**/.pytest_cache/
+
+# Node / frontend builds
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+.next-build/
+**/.next-build/
+dist/
+build/
+
+# Local runtime
+runtime_data/logs/
+runtime_data/pids/
+runtime_data/presenton/tmp/
+runtime_data/presenton/app_data/fastembed_cache/
+runtime_data/presenton/app_data/userConfig.json
+runtime_data/presenton/app_data/*.db
+data/*remote*
+data/*tunnel*
+
+# Local handoff archives
+handoff/
+
+# Secrets
+*.env
+!*.env.example
+deploy/fz-workflow-demo.app.env
+deploy/fz-workflow-demo.conf.sh
+deer-flow/.env
+deer-flow/frontend/.env
+
+# Local remote mapping scripts contain machine-specific deployment data.
+scripts/install_jdcloud_reverse_tunnel_launch_agent.sh
+scripts/*remote*
+scripts/*tunnel*
+scripts/fz-*watchdog.sh
+
+# Nested upstream repositories
+deer-flow/.git/
+third_party/presenton/.git/
+third_party/presenton/electron/
+
+# Logs / temp
+*.log
+*.tmp
+*.bak

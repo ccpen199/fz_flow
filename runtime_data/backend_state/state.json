@@ -1,0 +1,6644 @@
+{
+  "scenes": {
+    "scene_prd_competitor": {
+      "scene_id": "scene_prd_competitor",
+      "name": "竞品与价格分析",
+      "description": "围绕品牌、品类、价格带、来源站点、材质、功能、图案和肌理做竞品对比；当前数据不具备真实平台价差和同款识别能力。",
+      "version": 1,
+      "sample_goals": [
+        "最近30天各二级类目下各品牌的价格带分布如何",
+        "按二级类目分组，各品牌的价格定位差异是什么，返回SKU数、均价、价格跨度",
+        "各来源站点域名下品牌SKU覆盖和平均价格差异是什么，注意这不是平台价差",
+        "各二级类目中品牌SKU覆盖和平均价差异是多少，识别可对比的品牌品类组合",
+        "各品牌在材质维度上的SKU覆盖和平均价格有什么差异",
+        "各品牌功能标签覆盖数、SKU数和平均价格有什么差异",
+        "按二级类目分组，各品牌图案和肌理结构差异是什么",
+        "各品牌在织造方式和工艺类型上的覆盖差异是什么"
+      ],
+      "fields": [
+        {
+          "field_id": "field_2f73480fa3",
+          "table_name": "clothing_info",
+          "field_name": "Id",
+          "semantic_name": "商品ID",
+          "description": "SKU唯一标识，用于COUNT DISTINCT和多表去重。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_93219621b9",
+          "table_name": "clothing_info",
+          "field_name": "Name",
+          "semantic_name": "商品名称",
+          "description": "商品展示名称，用于下钻到具体竞品商品。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_062451099f",
+          "table_name": "clothing_info",
+          "field_name": "BrandName",
+          "semantic_name": "品牌",
+          "description": "竞品对比的核心主体。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_db2b0f6b24",
+          "table_name": "clothing_info",
+          "field_name": "Category",
+          "semantic_name": "一级类目",
+          "description": "竞品分析的主品类维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_adc6023d7d",
+          "table_name": "clothing_info",
+          "field_name": "SubCategory",
+          "semantic_name": "二级类目",
+          "description": "同品类竞品对比的主要细分维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_3a5fd58269",
+          "table_name": "clothing_info",
+          "field_name": "LeafCategory",
+          "semantic_name": "叶子类目",
+          "description": "更细粒度的竞品定位维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_ef095171ab",
+          "table_name": "clothing_info",
+          "field_name": "Price",
+          "semantic_name": "价格",
+          "description": "销售价/换算价主指标，适合品牌、品类、来源站点之间对比。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_24a7db086a",
+          "table_name": "clothing_info",
+          "field_name": "OriginalPrice",
+          "semantic_name": "原始标价",
+          "description": "原始站点标价字符串，存在币种信息；未做币种统一前不要直接作为折扣率分母。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_c9166325dd",
+          "table_name": "clothing_info",
+          "field_name": "ReceiveTime",
+          "semantic_name": "抓取日期",
+          "description": "用于最近窗口、批次和聚合趋势。",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "field_0f1b8398d6",
+          "table_name": "clothing_info",
+          "field_name": "SourceUrl",
+          "semantic_name": "来源站点域名",
+          "description": "从SourceUrl提取域名作为来源站点口径，不等同于销售平台。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_6e436ea9a7",
+          "table_name": "clothing_fiber_info",
+          "field_name": "Name",
+          "semantic_name": "材质名称",
+          "description": "商品材质标签，用于品牌材质覆盖对比。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_7ecffac207",
+          "table_name": "clothing_functions_info",
+          "field_name": "Functionality",
+          "semantic_name": "功能标签",
+          "description": "商品功能标签，用于功能覆盖和功能价格差异。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_14ef257edc",
+          "table_name": "clothing_scene_info",
+          "field_name": "Scene",
+          "semantic_name": "场景标签",
+          "description": "商品适用场景标签，用于场景内竞品对比。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_feb3b0f58c",
+          "table_name": "clothing_images_color",
+          "field_name": "RGB",
+          "semantic_name": "图片RGB",
+          "description": "图片识别出的RGB颜色值。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_96e9a21023",
+          "table_name": "clothing_images_color",
+          "field_name": "LAB",
+          "semantic_name": "图片LAB",
+          "description": "图片识别出的LAB颜色值。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_c753b0ae98",
+          "table_name": "clothing_images_color",
+          "field_name": "ColoroId",
+          "semantic_name": "Coloro色号",
+          "description": "图片识别出的Coloro色号。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_c7085eb07d",
+          "table_name": "clothing_images_color",
+          "field_name": "PantoneId",
+          "semantic_name": "Pantone色号",
+          "description": "图片识别出的Pantone色号。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_2cfb8bebde",
+          "table_name": "clothing_images_color",
+          "field_name": "Percent",
+          "semantic_name": "图片颜色占比",
+          "description": "图片中该颜色的识别占比。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_75e93008a5",
+          "table_name": "clothing_pattern_info",
+          "field_name": "pattern",
+          "semantic_name": "图案",
+          "description": "AI识别出的商品图案标签。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_6665de9b6c",
+          "table_name": "clothing_texture_info",
+          "field_name": "Texture",
+          "semantic_name": "肌理",
+          "description": "AI识别出的材质肌理标签。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_efd063f836",
+          "table_name": "clothing_texture_info",
+          "field_name": "FabricType",
+          "semantic_name": "织造方式",
+          "description": "AI识别出的织造方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_26d41a66b7",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternLayout",
+          "semantic_name": "图案布局",
+          "description": "图案布局与排列方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_faf8ce0386",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternTechnique",
+          "semantic_name": "工艺类型",
+          "description": "图案或表面工艺类型。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_a1326dc2a0",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternComposition",
+          "semantic_name": "图案构成",
+          "description": "图案构成方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_5377b94903",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternDefinition",
+          "semantic_name": "图案定义",
+          "description": "图案定义类别。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_1f7ddc498f",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternStyle",
+          "semantic_name": "图案风格",
+          "description": "图案风格与效果。",
+          "role": "dimension",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "rel_c15d4efc84",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_fiber_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到材质，多值关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_f9acfab304",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_functions_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到功能标签，多值关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_520f63ba88",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_scene_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到场景标签，多值关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_4a825d21b1",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_images_color",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到图片识别颜色，一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_3b48e8980b",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_pattern_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到图案识别结果，一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_02f4810026",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_texture_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到肌理/织造/图案工艺识别结果，一对一或一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        }
+      ]
+    },
+    "scene_prd_price": {
+      "scene_id": "scene_prd_price",
+      "name": "商品价格分析",
+      "description": "围绕品牌、品类、来源站点和场景标签的价格结构、价格带和价差分析。",
+      "version": 1,
+      "sample_goals": [
+        "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
+        "各一级类目和二级类目的SKU数、平均价和价格跨度是多少，按SKU数降序返回前30",
+        "按品牌统计0-99、100-199、200-399、400-799、800+价格带分布和占比",
+        "最近抓取批次中各品牌平均价最高的是哪些，返回品牌、SKU数、平均价、最高价",
+        "各来源站点域名的品牌覆盖、SKU数和平均价差异是什么",
+        "各品牌在不同场景标签下的平均价差异是多少"
+      ],
+      "fields": [
+        {
+          "field_id": "field_0281b6f5a110",
+          "table_name": "clothing_info",
+          "field_name": "Id",
+          "semantic_name": "商品ID",
+          "description": "SKU唯一标识，用于COUNT DISTINCT和结果去重。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_f61947ddbd49",
+          "table_name": "clothing_info",
+          "field_name": "BrandName",
+          "semantic_name": "品牌",
+          "description": "价格结构对比的核心维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_9decdb422ffb",
+          "table_name": "clothing_info",
+          "field_name": "Category",
+          "semantic_name": "一级类目",
+          "description": "价格结构的主品类维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_54f035add208",
+          "table_name": "clothing_info",
+          "field_name": "SubCategory",
+          "semantic_name": "二级类目",
+          "description": "用于细分价格结构和竞品定位。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_09a23bb0b11f",
+          "table_name": "clothing_info",
+          "field_name": "Price",
+          "semantic_name": "价格",
+          "description": "价格主指标，默认口径为销售价/成交价。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_dd081450a6a6",
+          "table_name": "clothing_info",
+          "field_name": "ReceiveTime",
+          "semantic_name": "抓取日期",
+          "description": "用于最近抓取批次和趋势窗口。",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "field_fd4a7b4ce016",
+          "table_name": "clothing_info",
+          "field_name": "SourceUrl",
+          "semantic_name": "来源站点域名",
+          "description": "从 SourceUrl 提取域名口径，用于来源站点对比，不等同于销售平台。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_9f2e97359a54",
+          "table_name": "clothing_scene_info",
+          "field_name": "Scene",
+          "semantic_name": "场景标签",
+          "description": "用于场景差异分析，仅在场景维度问题中启用。",
+          "role": "filter",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "rel_9706e2a1a9a9",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_scene_info",
+          "right_field": "ClothingId",
+          "join_type": "INNER",
+          "note": "商品到场景标签的关联，仅在场景维度问题中启用。"
+        }
+      ]
+    },
+    "scene_prd_structure": {
+      "scene_id": "scene_prd_structure",
+      "name": "商品结构分析",
+      "description": "围绕品牌、品类、颜色、图片主色、图案、肌理、织造方式、工艺、价格带和上新做SKU结构与布局分析；当前数据不支持结构化尺码。",
+      "version": 1,
+      "sample_goals": [
+        "各品牌的一级类目和二级类目布局分别是什么，返回SKU数和品牌内占比",
+        "各品牌SKU丰富度排行，返回品牌、SKU数、覆盖二级类目数、覆盖叶子类目数",
+        "各二级类目中品牌覆盖数和SKU数是多少，识别竞争最充分的品类",
+        "各品牌颜色丰富度排行，返回颜色数、SKU数、主力颜色",
+        "各品牌图片主色和Pantone色号覆盖结构是什么",
+        "各品牌图案、肌理、织造方式和工艺类型结构是什么",
+        "最近上新商品在品牌和二级类目上的结构是什么",
+        "各价格带中的品类结构是什么，返回价格带、一级类目、SKU数、占比",
+        "哪些商品描述中包含尺码、尺寸或SIZE TABLE，可作为尺码抽取候选"
+      ],
+      "fields": [
+        {
+          "field_id": "field_494f6b8050",
+          "table_name": "clothing_info",
+          "field_name": "Id",
+          "semantic_name": "商品ID",
+          "description": "SKU唯一标识，用于结构统计去重。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_7666ba93ff",
+          "table_name": "clothing_info",
+          "field_name": "Name",
+          "semantic_name": "商品名称",
+          "description": "商品下钻展示名称。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_e614c9a39c",
+          "table_name": "clothing_info",
+          "field_name": "BrandName",
+          "semantic_name": "品牌",
+          "description": "品牌结构分析维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_298110cc5f",
+          "table_name": "clothing_info",
+          "field_name": "Category",
+          "semantic_name": "一级类目",
+          "description": "商品结构的主品类维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_27a9763d3a",
+          "table_name": "clothing_info",
+          "field_name": "SubCategory",
+          "semantic_name": "二级类目",
+          "description": "商品结构的细分品类维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_5a69e684ec",
+          "table_name": "clothing_info",
+          "field_name": "LeafCategory",
+          "semantic_name": "叶子类目",
+          "description": "SKU丰富度和品类深度维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_800f088b9d",
+          "table_name": "clothing_info",
+          "field_name": "ColorName",
+          "semantic_name": "颜色",
+          "description": "颜色结构分析维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_ee5462f1b4",
+          "table_name": "clothing_info",
+          "field_name": "Price",
+          "semantic_name": "价格",
+          "description": "结构视角下的价格带分桶和均价指标。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_b252d7d12a",
+          "table_name": "clothing_info",
+          "field_name": "CreateTime",
+          "semantic_name": "上架时间",
+          "description": "上新结构的时间口径。",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "field_a77e659ff5",
+          "table_name": "clothing_info",
+          "field_name": "ReceiveTime",
+          "semantic_name": "抓取日期",
+          "description": "批次结构和近期窗口口径。",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "field_dd922d08ea",
+          "table_name": "clothing_info",
+          "field_name": "SourceUrl",
+          "semantic_name": "来源站点域名",
+          "description": "来源站点布局维度，不等同于销售平台。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_a832c627ad",
+          "table_name": "clothing_info",
+          "field_name": "SuitableGender",
+          "semantic_name": "适用性别",
+          "description": "女装/男装等适用人群筛选。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_0c940ebcda",
+          "table_name": "clothing_scene_info",
+          "field_name": "Scene",
+          "semantic_name": "场景标签",
+          "description": "场景结构分析维度。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_743d352331",
+          "table_name": "clothing_images_color",
+          "field_name": "RGB",
+          "semantic_name": "图片RGB",
+          "description": "图片识别出的RGB颜色值。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_6a46249315",
+          "table_name": "clothing_images_color",
+          "field_name": "LAB",
+          "semantic_name": "图片LAB",
+          "description": "图片识别出的LAB颜色值。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_d8a99eb3f5",
+          "table_name": "clothing_images_color",
+          "field_name": "ColoroId",
+          "semantic_name": "Coloro色号",
+          "description": "图片识别出的Coloro色号。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_9fad5b0d95",
+          "table_name": "clothing_images_color",
+          "field_name": "PantoneId",
+          "semantic_name": "Pantone色号",
+          "description": "图片识别出的Pantone色号。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_979ded0dff",
+          "table_name": "clothing_images_color",
+          "field_name": "Percent",
+          "semantic_name": "图片颜色占比",
+          "description": "图片中该颜色的识别占比。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_ddf4629cb2",
+          "table_name": "clothing_pattern_info",
+          "field_name": "pattern",
+          "semantic_name": "图案",
+          "description": "AI识别出的商品图案标签。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_ca64fee90a",
+          "table_name": "clothing_texture_info",
+          "field_name": "Texture",
+          "semantic_name": "肌理",
+          "description": "AI识别出的材质肌理标签。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_fe0af80e79",
+          "table_name": "clothing_texture_info",
+          "field_name": "FabricType",
+          "semantic_name": "织造方式",
+          "description": "AI识别出的织造方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_cb353e7b51",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternLayout",
+          "semantic_name": "图案布局",
+          "description": "图案布局与排列方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_7f75333451",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternTechnique",
+          "semantic_name": "工艺类型",
+          "description": "图案或表面工艺类型。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_55f6cb47cf",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternComposition",
+          "semantic_name": "图案构成",
+          "description": "图案构成方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_e34dde129e",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternDefinition",
+          "semantic_name": "图案定义",
+          "description": "图案定义类别。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_243f956bb6",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternStyle",
+          "semantic_name": "图案风格",
+          "description": "图案风格与效果。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_a4a45ca787",
+          "table_name": "clothing_info",
+          "field_name": "DescribeInfo",
+          "semantic_name": "中文详情",
+          "description": "中文商品详情文本，可用于筛选尺码/尺寸抽取候选，不是结构化尺码字段。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_2802b7e56e",
+          "table_name": "clothing_info",
+          "field_name": "DescribeInfoEn",
+          "semantic_name": "外文详情",
+          "description": "外文商品详情文本，可能包含SIZE TABLE/サイズ等尺码文本，不是结构化尺码字段。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_5b6c7afcda",
+          "table_name": "clothing_info",
+          "field_name": "OtherFeatures",
+          "semantic_name": "其他特征",
+          "description": "其他特征文本，可用于尺码/尺寸文本线索筛选。",
+          "role": "filter",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "rel_5169dc1456",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_scene_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到场景标签，多值关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_902eb4168b",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_images_color",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到图片识别颜色，一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_09833841c5",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_pattern_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到图案识别结果，一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_a38f46c661",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_texture_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到肌理/织造/图案工艺识别结果，一对一或一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        }
+      ]
+    },
+    "scene_prd_trend": {
+      "scene_id": "scene_prd_trend",
+      "name": "趋势与爆款分析",
+      "description": "围绕上新节奏、SKU数量变化、聚合价格波动、视觉元素变化、异常变化和潜在重点商品做趋势分析；当前数据不支持真实销量爆款。",
+      "version": 1,
+      "sample_goals": [
+        "按上架日期统计每日新增SKU数，识别上新高峰日期",
+        "各品牌每日上新SKU数变化趋势是什么",
+        "最近一次抓取批次中，各品牌新增商品数量排行",
+        "各品类在抓取日期上的SKU数变化是什么",
+        "潜在高价值新品：最近上架且价格高于全量均价2倍的商品有哪些",
+        "各场景标签最近上新SKU数和平均价格变化是什么",
+        "最近上新商品的图案、肌理和主色趋势是什么",
+        "潜在高价值新品的图案、肌理、Pantone色号和工艺特征是什么"
+      ],
+      "fields": [
+        {
+          "field_id": "field_39403170d6",
+          "table_name": "clothing_info",
+          "field_name": "Id",
+          "semantic_name": "商品ID",
+          "description": "SKU唯一标识，用于趋势统计去重。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_93b7284154",
+          "table_name": "clothing_info",
+          "field_name": "Name",
+          "semantic_name": "商品名称",
+          "description": "潜在重点商品下钻展示。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_b82b251225",
+          "table_name": "clothing_info",
+          "field_name": "ProductId",
+          "semantic_name": "商品源ID",
+          "description": "来源商品ID；当前数据没有跨日期重复快照，不能支撑同一商品价格历史。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_0938af5724",
+          "table_name": "clothing_info",
+          "field_name": "BrandName",
+          "semantic_name": "品牌",
+          "description": "品牌趋势分组。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_2c2a706acc",
+          "table_name": "clothing_info",
+          "field_name": "Category",
+          "semantic_name": "一级类目",
+          "description": "品类趋势分组。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_4d739bf42d",
+          "table_name": "clothing_info",
+          "field_name": "SubCategory",
+          "semantic_name": "二级类目",
+          "description": "细分品类趋势分组。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_f71b09b3d6",
+          "table_name": "clothing_info",
+          "field_name": "Price",
+          "semantic_name": "价格",
+          "description": "聚合价格趋势和高价值商品识别指标。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_469175d002",
+          "table_name": "clothing_info",
+          "field_name": "CreateTime",
+          "semantic_name": "上架时间",
+          "description": "上新节奏的主时间口径。",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "field_cd27f3d6bc",
+          "table_name": "clothing_info",
+          "field_name": "ReceiveTime",
+          "semantic_name": "抓取日期",
+          "description": "批次趋势和近期窗口口径。",
+          "role": "time",
+          "enabled": true
+        },
+        {
+          "field_id": "field_83e4c41648",
+          "table_name": "clothing_info",
+          "field_name": "SourceUrl",
+          "semantic_name": "来源站点域名",
+          "description": "来源站点趋势维度，不等同于销售平台。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_57db092f74",
+          "table_name": "clothing_info",
+          "field_name": "ColorName",
+          "semantic_name": "颜色",
+          "description": "趋势下钻维度。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_fb6ea4cd91",
+          "table_name": "clothing_functions_info",
+          "field_name": "Functionality",
+          "semantic_name": "功能标签",
+          "description": "潜在重点商品和功能趋势辅助维度。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_7e80bc4abb",
+          "table_name": "clothing_scene_info",
+          "field_name": "Scene",
+          "semantic_name": "场景标签",
+          "description": "场景趋势分析维度。",
+          "role": "filter",
+          "enabled": true
+        },
+        {
+          "field_id": "field_343fa55083",
+          "table_name": "clothing_images_color",
+          "field_name": "RGB",
+          "semantic_name": "图片RGB",
+          "description": "图片识别出的RGB颜色值。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_2777542988",
+          "table_name": "clothing_images_color",
+          "field_name": "LAB",
+          "semantic_name": "图片LAB",
+          "description": "图片识别出的LAB颜色值。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_c62718d72e",
+          "table_name": "clothing_images_color",
+          "field_name": "ColoroId",
+          "semantic_name": "Coloro色号",
+          "description": "图片识别出的Coloro色号。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_c054e6d9d7",
+          "table_name": "clothing_images_color",
+          "field_name": "PantoneId",
+          "semantic_name": "Pantone色号",
+          "description": "图片识别出的Pantone色号。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_fbc7992abc",
+          "table_name": "clothing_images_color",
+          "field_name": "Percent",
+          "semantic_name": "图片颜色占比",
+          "description": "图片中该颜色的识别占比。",
+          "role": "metric",
+          "enabled": true
+        },
+        {
+          "field_id": "field_8cc5f55338",
+          "table_name": "clothing_pattern_info",
+          "field_name": "pattern",
+          "semantic_name": "图案",
+          "description": "AI识别出的商品图案标签。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_37152d2547",
+          "table_name": "clothing_texture_info",
+          "field_name": "Texture",
+          "semantic_name": "肌理",
+          "description": "AI识别出的材质肌理标签。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_1625a40198",
+          "table_name": "clothing_texture_info",
+          "field_name": "FabricType",
+          "semantic_name": "织造方式",
+          "description": "AI识别出的织造方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_9559384d6d",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternLayout",
+          "semantic_name": "图案布局",
+          "description": "图案布局与排列方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_3c98358db8",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternTechnique",
+          "semantic_name": "工艺类型",
+          "description": "图案或表面工艺类型。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_5088519a27",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternComposition",
+          "semantic_name": "图案构成",
+          "description": "图案构成方式。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_5827b4fc12",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternDefinition",
+          "semantic_name": "图案定义",
+          "description": "图案定义类别。",
+          "role": "dimension",
+          "enabled": true
+        },
+        {
+          "field_id": "field_86862698e3",
+          "table_name": "clothing_texture_info",
+          "field_name": "PatternStyle",
+          "semantic_name": "图案风格",
+          "description": "图案风格与效果。",
+          "role": "dimension",
+          "enabled": true
+        }
+      ],
+      "relations": [
+        {
+          "relation_id": "rel_a608065edc",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_functions_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到功能标签，多值关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_71aca08e2a",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_scene_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到场景标签，多值关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_83e16a9b19",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_images_color",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到图片识别颜色，一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_3de4c0a031",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_pattern_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到图案识别结果，一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        },
+        {
+          "relation_id": "rel_9f0c9bd0a6",
+          "left_table": "clothing_info",
+          "left_field": "Id",
+          "right_table": "clothing_texture_info",
+          "right_field": "ClothingId",
+          "join_type": "LEFT",
+          "note": "商品到肌理/织造/图案工艺识别结果，一对一或一对多关系，统计时需要COUNT DISTINCT商品ID。"
+        }
+      ]
+    }
+  },
+  "sessions": {
+    "sess_4f0ee3fc6f": {
+      "session_id": "sess_4f0ee3fc6f",
+      "user_id": null,
+      "scene_id": "scene_prd_price",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": null,
+      "status": "summarizing_result",
+      "global_goal": "分析各品牌在不同平台的销售价差异并生成汇报",
+      "current_task_id": null,
+      "deck_id": "deck_506d480466",
+      "created_at": "2026-05-09T14:14:11.810381Z",
+      "updated_at": "2026-05-09T14:57:15.062592Z"
+    },
+    "sess_3cff87b5c3": {
+      "session_id": "sess_3cff87b5c3",
+      "user_id": null,
+      "scene_id": "scene_prd_price",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_3cff87b5c3",
+      "status": "failed",
+      "global_goal": "分析各品牌在不同平台(以“场景标签”代指)的销售价差异并生成汇报",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-14T08:53:09.426984Z",
+      "updated_at": "2026-05-14T08:56:23.691428Z"
+    },
+    "sess_995b065f84": {
+      "session_id": "sess_995b065f84",
+      "user_id": null,
+      "scene_id": "scene_prd_price",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_995b065f84",
+      "status": "summarizing_result",
+      "global_goal": "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-14T15:55:53.010971Z",
+      "updated_at": "2026-05-14T15:56:00.957435Z"
+    },
+    "sess_aa93b0db82": {
+      "session_id": "sess_aa93b0db82",
+      "user_id": null,
+      "scene_id": "scene_prd_price",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_aa93b0db82",
+      "status": "summarizing_result",
+      "global_goal": "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-14T16:00:28.024456Z",
+      "updated_at": "2026-05-14T16:00:33.270774Z"
+    },
+    "sess_58322cc4a3": {
+      "session_id": "sess_58322cc4a3",
+      "user_id": null,
+      "scene_id": "scene_prd_competitor",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_58322cc4a3",
+      "status": "planning",
+      "global_goal": "最近30天各品牌在各二级类目下的固定价格带分布（SKU数与品牌内占比）",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-15T18:41:17.772369Z",
+      "updated_at": "2026-05-15T18:41:18.177284Z"
+    },
+    "sess_45ce788ef1": {
+      "session_id": "sess_45ce788ef1",
+      "user_id": null,
+      "scene_id": "scene_prd_competitor",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_45ce788ef1",
+      "status": "summarizing_result",
+      "global_goal": "最近30天各二级类目下各品牌的价格带分布（固定价格带分桶）",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-15T18:41:50.568889Z",
+      "updated_at": "2026-05-15T18:41:59.497986Z"
+    },
+    "sess_7945b11d26": {
+      "session_id": "sess_7945b11d26",
+      "user_id": null,
+      "scene_id": "scene_prd_competitor",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_7945b11d26",
+      "status": "summarizing_result",
+      "global_goal": "同一二级类目中，各品牌图案和肌理结构差异是什么",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-15T18:44:37.117968Z",
+      "updated_at": "2026-05-15T18:44:37.117974Z"
+    },
+    "sess_c607d96a15": {
+      "session_id": "sess_c607d96a15",
+      "user_id": null,
+      "scene_id": "scene_prd_competitor",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_c607d96a15",
+      "status": "failed",
+      "global_goal": "最近30天各品牌指定二级类目的价格带分布如何",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-15T18:44:37.123801Z",
+      "updated_at": "2026-05-15T18:44:37.123807Z"
+    },
+    "sess_139d350379": {
+      "session_id": "sess_139d350379",
+      "user_id": null,
+      "scene_id": "scene_prd_competitor",
+      "scene_version": "scene_v1",
+      "deerflow_thread_id": "vibe_sess_139d350379",
+      "status": "failed",
+      "global_goal": "最近30天各品牌指定二级类目的价格带分布如何",
+      "current_task_id": null,
+      "deck_id": null,
+      "created_at": "2026-05-15T18:44:37.124170Z",
+      "updated_at": "2026-05-15T18:44:37.124172Z"
+    }
+  },
+  "query_plans": {
+    "sess_4f0ee3fc6f": {
+      "query_plan_id": "qp_3591665aea",
+      "session_id": "sess_4f0ee3fc6f",
+      "task_id": null,
+      "intent": "分析各品牌在不同平台的销售价差异并生成汇报",
+      "metrics": [
+        "{'field': '平均价格', 'agg': 'AVG', 'desc': '商品销售均价'}"
+      ],
+      "dimensions": [
+        "{'field': '品牌', 'desc': '商品所属品牌'}",
+        "{'field': '场景标签', 'desc': '商品所在销售平台或场景'}"
+      ],
+      "filters": [],
+      "time_window": null,
+      "chart_candidates": [
+        "bar",
+        "line",
+        "table"
+      ],
+      "risk_notes": []
+    },
+    "sess_3cff87b5c3": {
+      "query_plan_id": "qp_60b9702448",
+      "session_id": "sess_3cff87b5c3",
+      "task_id": null,
+      "intent": "分析各品牌在不同平台(以“场景标签”代指)的销售价差异并生成汇报",
+      "metrics": [
+        "平均价格(AVG(Price))",
+        "min_price(MIN(Price))",
+        "max_price(MAX(Price))",
+        "sku_cnt(COUNT(*))",
+        "avg_price_gap(MAX(avg_price)-MIN(avg_price))",
+        "extreme_price_gap(MAX(max_price)-MIN(min_price))",
+        "platform_cnt(COUNT DISTINCT 场景标签)",
+        "total_sku_cnt(SUM sku_cnt)"
+      ],
+      "dimensions": [
+        "品牌",
+        "场景标签"
+      ],
+      "filters": [
+        {
+          "field": "平均价格",
+          "op": "IS NOT NULL",
+          "value": null
+        }
+      ],
+      "time_window": null,
+      "chart_candidates": [
+        "品牌-平台(场景标签)分组柱状图(平均价格)",
+        "品牌价差排行榜条形图(avg_price_gap)",
+        "平台(场景标签)价格箱线图(按品牌筛选)"
+      ],
+      "risk_notes": [
+        "语义中未提供明确“平台”字段，使用“场景标签(Scene)”作为平台维度的替代，可能与真实平台不一致。",
+        "Price/平均价格字段角色被标为dimension但用于度量聚合，需确认含义为销售价。"
+      ]
+    },
+    "sess_995b065f84": {
+      "query_plan_id": "qp_d575fb9e93",
+      "session_id": "sess_995b065f84",
+      "task_id": null,
+      "intent": "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
+      "metrics": [
+        "SKU数",
+        "平均价",
+        "最低价",
+        "最高价",
+        "价格跨度"
+      ],
+      "dimensions": [
+        "品牌"
+      ],
+      "filters": [
+        {
+          "field": "品牌",
+          "op": "IS NOT NULL",
+          "value": null
+        },
+        {
+          "field": "Price",
+          "op": "IS NOT NULL",
+          "value": null
+        }
+      ],
+      "time_window": null,
+      "chart_candidates": [
+        "bar"
+      ],
+      "risk_notes": [
+        "Price字段语义为价格但在语义层被标注为dimension；此处按数值指标使用",
+        "未指定场景标签/类目/时间范围，结果为全量品牌汇总"
+      ]
+    },
+    "sess_aa93b0db82": {
+      "query_plan_id": "qp_386cfeb770",
+      "session_id": "sess_aa93b0db82",
+      "task_id": null,
+      "intent": "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
+      "metrics": [
+        "SKU数",
+        "平均价",
+        "最低价",
+        "最高价",
+        "价格跨度"
+      ],
+      "dimensions": [
+        "品牌"
+      ],
+      "filters": [
+        {
+          "field": "品牌",
+          "op": "IS NOT NULL",
+          "value": null
+        },
+        {
+          "field": "平均价格",
+          "op": "IS NOT NULL",
+          "value": null
+        }
+      ],
+      "time_window": null,
+      "chart_candidates": [
+        "bar",
+        "table"
+      ],
+      "risk_notes": [
+        "未指定场景/类目/时间范围，默认全量数据。",
+        "价格字段可能包含异常值或不同币种，均值/跨度可能受影响。"
+      ]
+    },
+    "sess_58322cc4a3": {
+      "query_plan_id": "qp_5cb55192ca",
+      "session_id": "sess_58322cc4a3",
+      "task_id": null,
+      "intent": "最近30天各品牌在各二级类目下的固定价格带分布（SKU数与品牌内占比）",
+      "metrics": [
+        "价格",
+        "商品ID"
+      ],
+      "dimensions": [
+        "品牌",
+        "二级类目"
+      ],
+      "filters": [
+        {
+          "field": "抓取日期",
+          "op": ">=",
+          "value": "anchor_date-30天（以MAX(DATE(ReceiveTime))为锚）"
+        },
+        {
+          "field": "价格",
+          "op": "IS NOT NULL",
+          "value": null
+        }
+      ],
+      "time_window": "[DATE_SUB(MAX(DATE(抓取日期)), INTERVAL 30 DAY), MAX(DATE(抓取日期))]",
+      "chart_candidates": [
+        "分组柱状图：x=价格带，series=品牌（按二级类目分面），y=价格带SKU数或品牌内价格带占比",
+        "堆叠柱状图：x=价格带，stack=品牌（按二级类目筛选/分面），y=价格带SKU数"
+      ],
+      "risk_notes": [
+        "问题表述含“指定二级类目”，但context未提供具体二级类目值；已按preset要求改为按二级类目分组输出，未生成任何占位符过滤。"
+      ]
+    },
+    "sess_45ce788ef1": {
+      "query_plan_id": "qp_ad053938b5",
+      "session_id": "sess_45ce788ef1",
+      "task_id": null,
+      "intent": "最近30天各二级类目下各品牌的价格带分布（固定价格带分桶）",
+      "metrics": [
+        "价格带SKU数",
+        "品牌内价格带占比"
+      ],
+      "dimensions": [
+        "品牌",
+        "二级类目"
+      ],
+      "filters": [
+        {
+          "field": "抓取日期",
+          "op": ">= DATE_SUB(anchor_date, INTERVAL 30 DAY) AND < anchor_date+1 day"
+        },
+        {
+          "field": "价格",
+          "op": "IS NOT NULL"
+        }
+      ],
+      "time_window": "最近30天（以MAX(DATE(抓取日期))为锚点）",
+      "chart_candidates": [
+        "分组堆叠柱状图：x=价格带，stack=品牌，facet=二级类目，y=价格带SKU数或品牌内价格带占比"
+      ],
+      "risk_notes": [
+        "问题描述含“指定二级类目”，但未提供具体二级类目值；已按二级类目分组返回全量分布，未做等值过滤。",
+        "价格带分桶基于Price数值；若Price存在币种未归一或异常值，分布可能偏差。"
+      ]
+    },
+    "sess_7945b11d26": {
+      "query_plan_id": "qp_f48e010d7e",
+      "session_id": "sess_7945b11d26",
+      "task_id": null,
+      "intent": "同一二级类目中，各品牌图案和肌理结构差异是什么",
+      "metrics": [
+        "{'field': '商品ID', 'aggregation': 'COUNT DISTINCT'}",
+        "{'field': '价格', 'aggregation': 'AVG'}"
+      ],
+      "dimensions": [
+        "{'field': '二级类目'}",
+        "{'field': '品牌'}",
+        "{'field': '图案'}",
+        "{'field': '图案定义'}",
+        "{'field': '图案布局'}",
+        "{'field': '图案构成'}",
+        "{'field': '图案风格'}",
+        "{'field': '工艺类型'}",
+        "{'field': '织造方式'}",
+        "{'field': '肌理'}"
+      ],
+      "filters": [
+        {
+          "field": "二级类目",
+          "operator": "IS NOT NULL"
+        },
+        {
+          "field": "品牌",
+          "operator": "IS NOT NULL"
+        }
+      ],
+      "time_window": null,
+      "chart_candidates": [
+        "分组柱状图",
+        "堆叠柱状图",
+        "热力图",
+        "明细表"
+      ],
+      "risk_notes": [
+        "图案与肌理表可能存在一对多关系，同一商品可能产生多个图案-肌理组合；商品数已使用COUNT DISTINCT降低重复计数风险。"
+      ]
+    },
+    "sess_c607d96a15": {
+      "query_plan_id": "qp_13e177e46d",
+      "session_id": "sess_c607d96a15",
+      "task_id": null,
+      "intent": "最近30天各品牌指定二级类目的价格带分布如何",
+      "metrics": [
+        "{'field': '商品ID', 'aggregation': 'COUNT_DISTINCT', 'alias': '商品数'}"
+      ],
+      "dimensions": [
+        "{'field': '品牌'}",
+        "{'field': '二级类目'}",
+        "{'field': '价格', 'derived': '价格带'}"
+      ],
+      "filters": [
+        {
+          "field": "二级类目",
+          "operator": "="
+        },
+        {
+          "field": "抓取日期",
+          "operator": ">="
+        },
+        {
+          "field": "价格",
+          "operator": "IS NOT NULL"
+        }
+      ],
+      "time_window": "最近30天",
+      "chart_candidates": [
+        "堆叠柱状图",
+        "分组柱状图"
+      ],
+      "risk_notes": [
+        "输入未提供具体二级类目取值，SQL使用参数:subcategory。",
+        "价格带区间为默认分桶规则，若业务已有固定分层口径需替换。"
+      ]
+    },
+    "sess_139d350379": {
+      "query_plan_id": "qp_9be2c50e40",
+      "session_id": "sess_139d350379",
+      "task_id": null,
+      "intent": "最近30天各品牌指定二级类目的价格带分布如何",
+      "metrics": [
+        "{'field': '价格', 'aggregation': 'price_band'}",
+        "{'field': '商品ID', 'aggregation': 'count_distinct'}"
+      ],
+      "dimensions": [
+        "{'field': '品牌'}",
+        "{'field': '二级类目'}"
+      ],
+      "filters": [
+        {
+          "field": "抓取日期",
+          "operator": ">=",
+          "value": "CURRENT_DATE - INTERVAL '30 day'"
+        },
+        {
+          "field": "二级类目",
+          "operator": "IS NOT NULL"
+        },
+        {
+          "field": "价格",
+          "operator": "IS NOT NULL"
+        }
+      ],
+      "time_window": "最近30天",
+      "chart_candidates": [
+        "stacked_bar",
+        "grouped_bar",
+        "heatmap"
+      ],
+      "risk_notes": [
+        "输入未提供具体二级类目取值，因此SQL按所有非空二级类目分组；如需单一指定类目，应补充二级类目过滤值。"
+      ]
+    }
+  },
+  "query_runs": {
+    "query_55dc91af05": {
+      "query_id": "query_55dc91af05",
+      "session_id": "sess_4f0ee3fc6f",
+      "task_id": null,
+      "query_plan_id": "qp_3591665aea",
+      "sql": "SELECT ci.BrandName AS `品牌`, csi.Scene AS `场景标签`, AVG(ci.Price) AS `平均价格` FROM clothing_info ci INNER JOIN clothing_scene_info csi ON ci.Id = csi.ClothingId GROUP BY ci.BrandName, csi.Scene ORDER BY ci.BrandName, csi.Scene",
+      "sql_explanation": "根据意图分析各品牌在不同平台（场景）的销售价差异，选择品牌、场景标签作为分组维度，计算每个品牌在每个平台的平均价格。",
+      "status": "succeeded",
+      "rows_count": 52,
+      "duration_ms": 12,
+      "result_preview": [
+        {
+          "品牌": "A part by",
+          "场景标签": "差旅/商务",
+          "平均价格": "457.500000"
+        },
+        {
+          "品牌": "A part by",
+          "场景标签": "生活/休闲",
+          "平均价格": "649.884615"
+        },
+        {
+          "品牌": "ALAND",
+          "场景标签": "生活/休闲",
+          "平均价格": "730.215000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "场景标签": "差旅/商务",
+          "平均价格": "396.500000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "场景标签": "徒步/登山",
+          "平均价格": "396.500000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "场景标签": "生活/休闲",
+          "平均价格": "431.167778"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "场景标签": "跑步",
+          "平均价格": "396.500000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "场景标签": "露营",
+          "平均价格": "396.500000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "场景标签": "高尔夫",
+          "平均价格": "396.500000"
+        },
+        {
+          "品牌": "Elura",
+          "场景标签": "差旅/商务",
+          "平均价格": "488.000000"
+        },
+        {
+          "品牌": "Elura",
+          "场景标签": "瑜伽",
+          "平均价格": "488.000000"
+        },
+        {
+          "品牌": "Elura",
+          "场景标签": "生活/休闲",
+          "平均价格": "386.892500"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "场景标签": "差旅/商务",
+          "平均价格": "387.350000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "场景标签": "徒步/登山",
+          "平均价格": "103.700000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "场景标签": "攀岩",
+          "平均价格": "103.700000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "场景标签": "水上运动",
+          "平均价格": "289.750000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "场景标签": "游泳",
+          "平均价格": "213.500000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "场景标签": "生活/休闲",
+          "平均价格": "222.884615"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "场景标签": "露营",
+          "平均价格": "103.700000"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "场景标签": "差旅/商务",
+          "平均价格": "637.205000"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "场景标签": "生活/休闲",
+          "平均价格": "303.795500"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "场景标签": "露营",
+          "平均价格": "109.800000"
+        },
+        {
+          "品牌": "HARE",
+          "场景标签": "生活/休闲",
+          "平均价格": "553.970345"
+        },
+        {
+          "品牌": "Heather",
+          "场景标签": "差旅/商务",
+          "平均价格": "549.000000"
+        },
+        {
+          "品牌": "Heather",
+          "场景标签": "生活/休闲",
+          "平均价格": "528.666667"
+        },
+        {
+          "品牌": "JEANASIS",
+          "场景标签": "生活/休闲",
+          "平均价格": "325.333333"
+        },
+        {
+          "品牌": "LAKOLE",
+          "场景标签": "生活/休闲",
+          "平均价格": "33.463030"
+        },
+        {
+          "品牌": "LEPSIM",
+          "场景标签": "生活/休闲",
+          "平均价格": "276.760000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "场景标签": "生活/休闲",
+          "平均价格": "247.801333"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "场景标签": "露营",
+          "平均价格": "192.070000"
+        },
+        {
+          "品牌": "RAGEBLUE",
+          "场景标签": "生活/休闲",
+          "平均价格": "327.168462"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "场景标签": "冰雪运动",
+          "平均价格": "3019.500000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "场景标签": "差旅/商务",
+          "平均价格": "3891.800000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "场景标签": "徒步/登山",
+          "平均价格": "2190.960870"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "场景标签": "攀岩",
+          "平均价格": "2199.388889"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "场景标签": "水上运动",
+          "平均价格": "436.150000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "场景标签": "生活/休闲",
+          "平均价格": "1407.676667"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "场景标签": "露营",
+          "平均价格": "522.421429"
+        },
+        {
+          "品牌": "TODAY’S SPECIAL",
+          "场景标签": "生活/休闲",
+          "平均价格": "77.470938"
+        },
+        {
+          "品牌": "mood is me",
+          "场景标签": "生活/休闲",
+          "平均价格": "113.721429"
+        },
+        {
+          "品牌": "mysty woman",
+          "场景标签": "生活/休闲",
+          "平均价格": "526.125000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "差旅/商务",
+          "平均价格": "500.950000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "徒步/登山",
+          "平均价格": "162.066000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "水上运动",
+          "平均价格": "499.100000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "游泳",
+          "平均价格": "499.100000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "生活/休闲",
+          "平均价格": "293.553462"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "网球",
+          "平均价格": "221.310000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "训练",
+          "平均价格": "221.310000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "跑步",
+          "平均价格": "162.066000"
+        },
+        {
+          "品牌": "niko and ...",
+          "场景标签": "露营",
+          "平均价格": "162.066000"
+        },
+        {
+          "品牌": "repipi armario",
+          "场景标签": "生活/休闲",
+          "平均价格": "225.280000"
+        },
+        {
+          "品牌": "studio CLIP",
+          "场景标签": "生活/休闲",
+          "平均价格": "315.215333"
+        }
+      ],
+      "insight_summary": [
+        "本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "read_only_sql",
+          "passed": true
+        },
+        {
+          "type": "single_statement",
+          "passed": true
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_price",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local",
+        "host": "127.0.0.1",
+        "provider": "modelscope",
+        "mode": "remote"
+      }
+    },
+    "query_bc0a573f90": {
+      "query_id": "query_bc0a573f90",
+      "session_id": "sess_3cff87b5c3",
+      "task_id": null,
+      "query_plan_id": "qp_60b9702448",
+      "sql": "WITH base AS (\n  SELECT\n    ci.BrandName AS \"品牌\",\n    csi.Scene AS \"场景标签\",\n    ci.Price AS price\n  FROM clothing_info ci\n  INNER JOIN clothing_scene_info csi\n    ON ci.Id = csi.ClothingId\n  WHERE ci.Price IS NOT NULL\n), agg AS (\n  SELECT\n    \"品牌\",\n    \"场景标签\",\n    AVG(price) AS avg_price,\n    MIN(price) AS min_price,\n    MAX(price) AS max_price,\n    COUNT(*) AS sku_cnt\n  FROM base\n  GROUP BY \"品牌\", \"场景标签\"\n), brand_gap AS (\n  SELECT\n    \"品牌\",\n    MAX(avg_price) - MIN(avg_price) AS avg_price_gap,\n    MAX(max_price) - MIN(min_price) AS extreme_price_gap,\n    COUNT(DISTINCT \"场景标签\") AS platform_cnt,\n    SUM(sku_cnt) AS total_sku_cnt\n  FROM agg\n  GROUP BY \"品牌\"\n)\nSELECT\n  a.\"品牌\",\n  a.\"场景标签\",\n  a.avg_price AS \"平均价格\",\n  a.min_price,\n  a.max_price,\n  a.sku_cnt,\n  bg.platform_cnt,\n  bg.total_sku_cnt,\n  bg.avg_price_gap,\n  bg.extreme_price_gap\nFROM agg a\nJOIN brand_gap bg\n  ON a.\"品牌\" = bg.\"品牌\"\nORDER BY bg.avg_price_gap DESC, a.\"品牌\", a.\"场景标签\";",
+      "sql_explanation": "MySQL 查询执行失败。",
+      "status": "failed",
+      "rows_count": 0,
+      "duration_ms": 4,
+      "result_preview": [],
+      "insight_summary": [
+        "MySQL 执行失败: (1064, 'You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near \\'\"品牌\",\\n  a.\"场景标签\",\\n  a.avg_price AS \"平均价格\",\\n  a.min_price,\\n  \\' at line 31')"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "mysql_execution",
+          "passed": false
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_price",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local"
+      }
+    },
+    "query_1cc9962234": {
+      "query_id": "query_1cc9962234",
+      "session_id": "sess_995b065f84",
+      "task_id": null,
+      "query_plan_id": "qp_d575fb9e93",
+      "sql": "SELECT ci.BrandName AS \"品牌\", COUNT(DISTINCT ci.Id) AS \"SKU数\", AVG(ci.Price) AS \"平均价\", MIN(ci.Price) AS \"最低价\", MAX(ci.Price) AS \"最高价\", (MAX(ci.Price) - MIN(ci.Price)) AS \"价格跨度\" FROM clothing_info ci WHERE ci.BrandName IS NOT NULL AND ci.Price IS NOT NULL GROUP BY ci.BrandName ORDER BY \"价格跨度\" DESC LIMIT 20;",
+      "sql_explanation": "按品牌（BrandName）分组，统计SKU数（去重Id）、平均/最低/最高价格（Price），并计算价格跨度=最高价-最低价，按跨度降序取前20。",
+      "status": "succeeded",
+      "rows_count": 20,
+      "duration_ms": 10,
+      "result_preview": [
+        {
+          "品牌": "A part by",
+          "SKU数": 13,
+          "平均价": "649.884615",
+          "最低价": "457.50",
+          "最高价": "915.00",
+          "价格跨度": "457.50"
+        },
+        {
+          "品牌": "ALAND",
+          "SKU数": 4,
+          "平均价": "730.215000",
+          "最低价": "592.86",
+          "最高价": "859.00",
+          "价格跨度": "266.14"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "SKU数": 18,
+          "平均价": "431.167778",
+          "最低价": "332.21",
+          "最高价": "549.00",
+          "价格跨度": "216.79"
+        },
+        {
+          "品牌": "Elura",
+          "SKU数": 40,
+          "平均价": "386.892500",
+          "最低价": "274.50",
+          "最高价": "488.00",
+          "价格跨度": "213.50"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "SKU数": 28,
+          "平均价": "214.371429",
+          "最低价": "61.00",
+          "最高价": "427.00",
+          "价格跨度": "366.00"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "SKU数": 21,
+          "平均价": "328.915238",
+          "最低价": "97.60",
+          "最高价": "831.31",
+          "价格跨度": "733.71"
+        },
+        {
+          "品牌": "HARE",
+          "SKU数": 29,
+          "平均价": "553.970345",
+          "最低价": "183.00",
+          "最高价": "994.30",
+          "价格跨度": "811.30"
+        },
+        {
+          "品牌": "Heather",
+          "SKU数": 3,
+          "平均价": "528.666667",
+          "最低价": "488.00",
+          "最高价": "549.00",
+          "价格跨度": "61.00"
+        },
+        {
+          "品牌": "JEANASIS",
+          "SKU数": 3,
+          "平均价": "325.333333",
+          "最低价": "244.00",
+          "最高价": "488.00",
+          "价格跨度": "244.00"
+        },
+        {
+          "品牌": "LAKOLE",
+          "SKU数": 35,
+          "平均价": "32.596571",
+          "最低价": "18.30",
+          "最高价": "193.55",
+          "价格跨度": "175.25"
+        },
+        {
+          "品牌": "LEPSIM",
+          "SKU数": 2,
+          "平均价": "276.760000",
+          "最低价": "276.76",
+          "最高价": "276.76",
+          "价格跨度": "0.00"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "SKU数": 30,
+          "平均价": "247.801333",
+          "最低价": "30.50",
+          "最高价": "732.00",
+          "价格跨度": "701.50"
+        },
+        {
+          "品牌": "RAGEBLUE",
+          "SKU数": 13,
+          "平均价": "327.168462",
+          "最低价": "244.00",
+          "最高价": "554.00",
+          "价格跨度": "310.00"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "SKU数": 47,
+          "平均价": "1599.407021",
+          "最低价": "342.21",
+          "最高价": "7313.90",
+          "价格跨度": "6971.69"
+        },
+        {
+          "品牌": "TODAY’S SPECIAL",
+          "SKU数": 68,
+          "平均价": "82.422647",
+          "最低价": "20.74",
+          "最高价": "329.40",
+          "价格跨度": "308.66"
+        },
+        {
+          "品牌": "mood is me",
+          "SKU数": 10,
+          "平均价": "121.695000",
+          "最低价": "12.20",
+          "最高价": "213.50",
+          "价格跨度": "201.30"
+        },
+        {
+          "品牌": "mysty woman",
+          "SKU数": 8,
+          "平均价": "526.125000",
+          "最低价": "488.00",
+          "最高价": "549.00",
+          "价格跨度": "61.00"
+        },
+        {
+          "品牌": "niko and ...",
+          "SKU数": 78,
+          "平均价": "293.553462",
+          "最低价": "23.18",
+          "最高价": "671.00",
+          "价格跨度": "647.82"
+        },
+        {
+          "品牌": "repipi armario",
+          "SKU数": 9,
+          "平均价": "225.280000",
+          "最低价": "165.86",
+          "最高价": "256.20",
+          "价格跨度": "90.34"
+        },
+        {
+          "品牌": "studio CLIP",
+          "SKU数": 30,
+          "平均价": "315.215333",
+          "最低价": "42.70",
+          "最高价": "603.90",
+          "价格跨度": "561.20"
+        }
+      ],
+      "insight_summary": [
+        "本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "read_only_sql",
+          "passed": true
+        },
+        {
+          "type": "single_statement",
+          "passed": true
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_price",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local",
+        "host": "127.0.0.1",
+        "provider": "modelscope",
+        "mode": "remote"
+      }
+    },
+    "query_123d213d9c": {
+      "query_id": "query_123d213d9c",
+      "session_id": "sess_aa93b0db82",
+      "task_id": null,
+      "query_plan_id": "qp_386cfeb770",
+      "sql": "SELECT\n  ci.BrandName AS `品牌`,\n  COUNT(DISTINCT ci.Id) AS `SKU数`,\n  AVG(ci.Price) AS `平均价`,\n  MIN(ci.Price) AS `最低价`,\n  MAX(ci.Price) AS `最高价`,\n  (MAX(ci.Price) - MIN(ci.Price)) AS `价格跨度`\nFROM clothing_info ci\nWHERE ci.BrandName IS NOT NULL\n  AND ci.Price IS NOT NULL\nGROUP BY ci.BrandName\nORDER BY `价格跨度` DESC\nLIMIT 20;",
+      "sql_explanation": "按品牌聚合统计SKU数、均价、最低价、最高价，并计算价格跨度=最高价-最低价，按跨度降序取前20。",
+      "status": "succeeded",
+      "rows_count": 20,
+      "duration_ms": 11,
+      "result_preview": [
+        {
+          "品牌": "THE NORTH FACE",
+          "SKU数": 47,
+          "平均价": "1599.407021",
+          "最低价": "342.21",
+          "最高价": "7313.90",
+          "价格跨度": "6971.69"
+        },
+        {
+          "品牌": "HARE",
+          "SKU数": 29,
+          "平均价": "553.970345",
+          "最低价": "183.00",
+          "最高价": "994.30",
+          "价格跨度": "811.30"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "SKU数": 21,
+          "平均价": "328.915238",
+          "最低价": "97.60",
+          "最高价": "831.31",
+          "价格跨度": "733.71"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "SKU数": 30,
+          "平均价": "247.801333",
+          "最低价": "30.50",
+          "最高价": "732.00",
+          "价格跨度": "701.50"
+        },
+        {
+          "品牌": "niko and ...",
+          "SKU数": 78,
+          "平均价": "293.553462",
+          "最低价": "23.18",
+          "最高价": "671.00",
+          "价格跨度": "647.82"
+        },
+        {
+          "品牌": "studio CLIP",
+          "SKU数": 30,
+          "平均价": "315.215333",
+          "最低价": "42.70",
+          "最高价": "603.90",
+          "价格跨度": "561.20"
+        },
+        {
+          "品牌": "A part by",
+          "SKU数": 13,
+          "平均价": "649.884615",
+          "最低价": "457.50",
+          "最高价": "915.00",
+          "价格跨度": "457.50"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "SKU数": 28,
+          "平均价": "214.371429",
+          "最低价": "61.00",
+          "最高价": "427.00",
+          "价格跨度": "366.00"
+        },
+        {
+          "品牌": "RAGEBLUE",
+          "SKU数": 13,
+          "平均价": "327.168462",
+          "最低价": "244.00",
+          "最高价": "554.00",
+          "价格跨度": "310.00"
+        },
+        {
+          "品牌": "TODAY’S SPECIAL",
+          "SKU数": 68,
+          "平均价": "82.422647",
+          "最低价": "20.74",
+          "最高价": "329.40",
+          "价格跨度": "308.66"
+        },
+        {
+          "品牌": "ALAND",
+          "SKU数": 4,
+          "平均价": "730.215000",
+          "最低价": "592.86",
+          "最高价": "859.00",
+          "价格跨度": "266.14"
+        },
+        {
+          "品牌": "JEANASIS",
+          "SKU数": 3,
+          "平均价": "325.333333",
+          "最低价": "244.00",
+          "最高价": "488.00",
+          "价格跨度": "244.00"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "SKU数": 18,
+          "平均价": "431.167778",
+          "最低价": "332.21",
+          "最高价": "549.00",
+          "价格跨度": "216.79"
+        },
+        {
+          "品牌": "Elura",
+          "SKU数": 40,
+          "平均价": "386.892500",
+          "最低价": "274.50",
+          "最高价": "488.00",
+          "价格跨度": "213.50"
+        },
+        {
+          "品牌": "mood is me",
+          "SKU数": 10,
+          "平均价": "121.695000",
+          "最低价": "12.20",
+          "最高价": "213.50",
+          "价格跨度": "201.30"
+        },
+        {
+          "品牌": "LAKOLE",
+          "SKU数": 35,
+          "平均价": "32.596571",
+          "最低价": "18.30",
+          "最高价": "193.55",
+          "价格跨度": "175.25"
+        },
+        {
+          "品牌": "repipi armario",
+          "SKU数": 9,
+          "平均价": "225.280000",
+          "最低价": "165.86",
+          "最高价": "256.20",
+          "价格跨度": "90.34"
+        },
+        {
+          "品牌": "Heather",
+          "SKU数": 3,
+          "平均价": "528.666667",
+          "最低价": "488.00",
+          "最高价": "549.00",
+          "价格跨度": "61.00"
+        },
+        {
+          "品牌": "mysty woman",
+          "SKU数": 8,
+          "平均价": "526.125000",
+          "最低价": "488.00",
+          "最高价": "549.00",
+          "价格跨度": "61.00"
+        },
+        {
+          "品牌": "LEPSIM",
+          "SKU数": 2,
+          "平均价": "276.760000",
+          "最低价": "276.76",
+          "最高价": "276.76",
+          "价格跨度": "0.00"
+        }
+      ],
+      "insight_summary": [
+        "本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "read_only_sql",
+          "passed": true
+        },
+        {
+          "type": "single_statement",
+          "passed": true
+        },
+        {
+          "type": "mysql_identifier_quotes",
+          "passed": true,
+          "normalized": true
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_price",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local",
+        "host": "127.0.0.1",
+        "provider": "modelscope",
+        "mode": "remote"
+      }
+    },
+    "query_63e790b5e8": {
+      "query_id": "query_63e790b5e8",
+      "session_id": "sess_45ce788ef1",
+      "task_id": null,
+      "query_plan_id": "qp_ad053938b5",
+      "sql": "WITH anchor AS (\n  SELECT MAX(DATE(clothing_info.ReceiveTime)) AS anchor_date\n  FROM clothing_info\n), base AS (\n  SELECT\n    clothing_info.Id AS product_id,\n    clothing_info.BrandName AS brand,\n    clothing_info.SubCategory AS subcategory,\n    clothing_info.Price AS price\n  FROM clothing_info\n  JOIN anchor\n  WHERE clothing_info.ReceiveTime >= DATE_SUB(anchor.anchor_date, INTERVAL 30 DAY)\n    AND clothing_info.ReceiveTime < DATE_ADD(anchor.anchor_date, INTERVAL 1 DAY)\n    AND clothing_info.Price IS NOT NULL\n), banded AS (\n  SELECT\n    base.brand,\n    base.subcategory,\n    CASE\n      WHEN base.price BETWEEN 0 AND 99 THEN '0-99'\n      WHEN base.price BETWEEN 100 AND 199 THEN '100-199'\n      WHEN base.price BETWEEN 200 AND 399 THEN '200-399'\n      WHEN base.price BETWEEN 400 AND 799 THEN '400-799'\n      WHEN base.price >= 800 THEN '800+'\n      ELSE '其他'\n    END AS price_band,\n    base.product_id\n  FROM base\n)\nSELECT\n  banded.brand AS `品牌`,\n  banded.subcategory AS `二级类目`,\n  banded.price_band AS `价格带`,\n  COUNT(DISTINCT banded.product_id) AS `价格带SKU数`,\n  COUNT(DISTINCT banded.product_id) / NULLIF(\n    SUM(COUNT(DISTINCT banded.product_id)) OVER (PARTITION BY banded.brand, banded.subcategory),\n    0\n  ) AS `品牌内价格带占比`\nFROM banded\nGROUP BY\n  banded.brand,\n  banded.subcategory,\n  banded.price_band\nORDER BY\n  `二级类目` ASC,\n  `品牌` ASC,\n  `价格带` ASC;",
+      "sql_explanation": "以clothing_info中最大抓取日期(ReceiveTime)为anchor_date，取最近30天窗口内数据；按品牌、二级类目与固定价格带分桶统计去重SKU数，并计算同一品牌+二级类目内各价格带SKU占比。",
+      "status": "succeeded",
+      "rows_count": 124,
+      "duration_ms": 46,
+      "result_preview": [
+        {
+          "品牌": "HARE",
+          "二级类目": "Polo衫",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 11,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "T恤",
+          "价格带": "100-199",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "0.5455"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "0.4545"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "LAKOLE",
+          "二级类目": "T恤",
+          "价格带": "100-199",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "RAGEBLUE",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "T恤",
+          "价格带": "100-199",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.1538"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "T恤",
+          "价格带": "200-399",
+          "价格带SKU数": 11,
+          "品牌内价格带占比": "0.8462"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "休闲裤",
+          "价格带": "400-799",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "休闲裤",
+          "价格带": "400-799",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "休闲裤",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "休闲裤",
+          "价格带": "200-399",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "休闲裤",
+          "价格带": "400-799",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "休闲裤",
+          "价格带": "200-399",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "0.8000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "休闲裤",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.2000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "其他",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "其他",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "二级类目": "其他",
+          "价格带": "0-99",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "0.2222"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 10,
+          "品牌内价格带占比": "0.5556"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "0.2222"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "其他",
+          "价格带": "0-99",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.4000"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "其他",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.6000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "JEANASIS",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.6667"
+        },
+        {
+          "品牌": "JEANASIS",
+          "二级类目": "其他",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.3333"
+        },
+        {
+          "品牌": "LAKOLE",
+          "二级类目": "其他",
+          "价格带": "0-99",
+          "价格带SKU数": 34,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.2500"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "其他",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.2500"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "其他",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.1111"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "其他",
+          "价格带": "800+",
+          "价格带SKU数": 8,
+          "品牌内价格带占比": "0.8889"
+        },
+        {
+          "品牌": "TODAY’S SPECIAL",
+          "二级类目": "其他",
+          "价格带": "0-99",
+          "价格带SKU数": 62,
+          "品牌内价格带占比": "0.9118"
+        },
+        {
+          "品牌": "TODAY’S SPECIAL",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.0294"
+        },
+        {
+          "品牌": "TODAY’S SPECIAL",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "0.0588"
+        },
+        {
+          "品牌": "mood is me",
+          "二级类目": "其他",
+          "价格带": "0-99",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.2000"
+        },
+        {
+          "品牌": "mood is me",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 7,
+          "品牌内价格带占比": "0.7000"
+        },
+        {
+          "品牌": "mood is me",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.1000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "其他",
+          "价格带": "0-99",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.2000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "其他",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.3000"
+        },
+        {
+          "品牌": "repipi armario",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "repipi armario",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "其他",
+          "价格带": "0-99",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "0.5556"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "其他",
+          "价格带": "100-199",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.3333"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "其他",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.1111"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "冲锋衣",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.0909"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "冲锋衣",
+          "价格带": "800+",
+          "价格带SKU数": 10,
+          "品牌内价格带占比": "0.9091"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "冲锋裤",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.3750"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "冲锋裤",
+          "价格带": "800+",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "0.6250"
+        },
+        {
+          "品牌": "A part by",
+          "二级类目": "半身裙",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "半身裙",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "半身裙",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "半身裙",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.4000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "半身裙",
+          "价格带": "800+",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.6000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "半身裙",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "半身裙",
+          "价格带": "800+",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "mysty woman",
+          "二级类目": "半身裙",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "半身裙",
+          "价格带": "200-399",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "ALAND",
+          "二级类目": "卫衣",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.3333"
+        },
+        {
+          "品牌": "ALAND",
+          "二级类目": "卫衣",
+          "价格带": "800+",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.6667"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "卫衣",
+          "价格带": "200-399",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "0.6667"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "卫衣",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.3333"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "卫衣",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "LEPSIM",
+          "二级类目": "卫衣",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "卫衣",
+          "价格带": "200-399",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "Heather",
+          "二级类目": "孕妇衣",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "孕妇衣",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "工装裤",
+          "价格带": "800+",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "工装裤",
+          "价格带": "800+",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "工装裤",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "帽子",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "RAGEBLUE",
+          "二级类目": "帽子",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "帽子",
+          "价格带": "200-399",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "帽子",
+          "价格带": "100-199",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "帽子",
+          "价格带": "200-399",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "repipi armario",
+          "二级类目": "帽子",
+          "价格带": "200-399",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "手套",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "毛衫",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "mysty woman",
+          "二级类目": "毛衫",
+          "价格带": "400-799",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "牛仔外套",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "牛仔裤",
+          "价格带": "400-799",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "短裤",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "二级类目": "短裤",
+          "价格带": "200-399",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "短裤",
+          "价格带": "200-399",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "THE NORTH FACE",
+          "二级类目": "短裤",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "短裤",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "A part by",
+          "二级类目": "背心",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "背心",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.4000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "背心",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.6000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "背心",
+          "价格带": "100-199",
+          "价格带SKU数": 6,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "背心",
+          "价格带": "100-199",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.1818"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "背心",
+          "价格带": "200-399",
+          "价格带SKU数": 9,
+          "品牌内价格带占比": "0.8182"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "背心",
+          "价格带": "100-199",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.6000"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "背心",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.4000"
+        },
+        {
+          "品牌": "A part by",
+          "二级类目": "衬衫",
+          "价格带": "400-799",
+          "价格带SKU数": 4,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "二级类目": "衬衫",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "GEORGE’S",
+          "二级类目": "衬衫",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "RAGEBLUE",
+          "二级类目": "衬衫",
+          "价格带": "200-399",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "0.6000"
+        },
+        {
+          "品牌": "RAGEBLUE",
+          "二级类目": "衬衫",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.4000"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "衬衫",
+          "价格带": "200-399",
+          "价格带SKU数": 18,
+          "品牌内价格带占比": "0.9474"
+        },
+        {
+          "品牌": "niko and ...",
+          "二级类目": "衬衫",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "0.0526"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "衬衫",
+          "价格带": "200-399",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.2857"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "衬衫",
+          "价格带": "400-799",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "0.7143"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "袜子",
+          "价格带": "0-99",
+          "价格带SKU数": 9,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "西装外套",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "西装外套",
+          "价格带": "800+",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "ALAND",
+          "二级类目": "西裤",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "BAYFLOW",
+          "二级类目": "西裤",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "LOWRYS FARM",
+          "二级类目": "西裤",
+          "价格带": "200-399",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "西裤",
+          "价格带": "200-399",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "A part by",
+          "二级类目": "连衣裙",
+          "价格带": "400-799",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "A part by",
+          "二级类目": "连衣裙",
+          "价格带": "800+",
+          "价格带SKU数": 2,
+          "品牌内价格带占比": "0.5000"
+        },
+        {
+          "品牌": "Elura",
+          "二级类目": "连衣裙",
+          "价格带": "400-799",
+          "价格带SKU数": 5,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "GLOBAL WORK",
+          "二级类目": "连衣裙",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "HARE",
+          "二级类目": "连衣裙",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "Heather",
+          "二级类目": "连衣裙",
+          "价格带": "400-799",
+          "价格带SKU数": 1,
+          "品牌内价格带占比": "1.0000"
+        },
+        {
+          "品牌": "studio CLIP",
+          "二级类目": "连衣裙",
+          "价格带": "400-799",
+          "价格带SKU数": 3,
+          "品牌内价格带占比": "1.0000"
+        }
+      ],
+      "insight_summary": [
+        "本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "read_only_sql",
+          "passed": true
+        },
+        {
+          "type": "single_statement",
+          "passed": true
+        },
+        {
+          "type": "mysql_identifier_quotes",
+          "passed": true,
+          "normalized": false
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_competitor",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local",
+        "host": "127.0.0.1",
+        "provider": "modelscope",
+        "mode": "remote"
+      }
+    },
+    "query_f3959794ec": {
+      "query_id": "query_f3959794ec",
+      "session_id": "sess_7945b11d26",
+      "task_id": null,
+      "query_plan_id": "qp_f48e010d7e",
+      "sql": "WITH base AS (SELECT ci.SubCategory, ci.BrandName, cpi.pattern, cti.PatternDefinition, cti.PatternLayout, cti.PatternComposition, cti.PatternStyle, cti.PatternTechnique, cti.FabricType, cti.Texture, ci.Id, ci.Price FROM clothing_info ci LEFT JOIN clothing_pattern_info cpi ON ci.Id = cpi.ClothingId LEFT JOIN clothing_texture_info cti ON ci.Id = cti.ClothingId WHERE ci.SubCategory IS NOT NULL AND ci.BrandName IS NOT NULL) SELECT SubCategory AS `二级类目`, BrandName AS `品牌`, COALESCE(pattern, '未知') AS `图案`, COALESCE(PatternDefinition, '未知') AS `图案定义`, COALESCE(PatternLayout, '未知') AS `图案布局`, COALESCE(PatternComposition, '未知') AS `图案构成`, COALESCE(PatternStyle, '未知') AS `图案风格`, COALESCE(PatternTechnique, '未知') AS `工艺类型`, COALESCE(FabricType, '未知') AS `织造方式`, COALESCE(Texture, '未知') AS `肌理`, COUNT(DISTINCT Id) AS `商品数`, AVG(Price) AS `平均价格` FROM base GROUP BY SubCategory, BrandName, COALESCE(pattern, '未知'), COALESCE(PatternDefinition, '未知'), COALESCE(PatternLayout, '未知'), COALESCE(PatternComposition, '未知'), COALESCE(PatternStyle, '未知'), COALESCE(PatternTechnique, '未知'), COALESCE(FabricType, '未知'), COALESCE(Texture, '未知') ORDER BY SubCategory, `商品数` DESC, BrandName",
+      "sql_explanation": "按二级类目、品牌、图案与肌理结构字段聚合，统计不同品牌在同一二级类目下的图案、布局、构成、风格、工艺、织造方式和肌理分布，并使用COUNT DISTINCT商品ID避免一对多关系导致重复计数。",
+      "status": "succeeded",
+      "rows_count": 221,
+      "duration_ms": 92,
+      "result_preview": [
+        {
+          "二级类目": "Polo衫",
+          "品牌": "HARE",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "未知",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "刺绣",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "719.800000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "GLOBAL WORK",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 6,
+          "平均价格": "109.800000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "GLOBAL WORK",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 5,
+          "平均价格": "276.760000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "274.500000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "274.500000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "LOWRYS FARM",
+          "图案": "卡通人物（拟人化物体）",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "332.210000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "LOWRYS FARM",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "332.210000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "BAYFLOW",
+          "图案": "文字",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "353.800000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "BAYFLOW",
+          "图案": "物体",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "353.800000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "Elura",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "274.500000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "RAGEBLUE",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "276.760000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "RAGEBLUE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "276.760000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "珠地组织",
+          "商品数": 3,
+          "平均价格": "342.210000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "221.860000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "HARE",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "384.300000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "LOWRYS FARM",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "网眼布",
+          "商品数": 2,
+          "平均价格": "249.550000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "194.100000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "网眼布",
+          "商品数": 2,
+          "平均价格": "249.550000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "LAKOLE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "193.550000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "人物图案（人形，人体）",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "卡通/动漫风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "人物图案（人形，人体）",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果，卡通/动漫风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "277.310000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果，卡通/动漫风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "277.310000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "277.310000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "物体",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果，卡通/动漫风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "277.310000"
+        },
+        {
+          "二级类目": "T恤",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "221.860000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "LOWRYS FARM",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "结子布",
+          "商品数": 5,
+          "平均价格": "366.000000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "抽象图案",
+          "图案布局": "局部图案",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "436.150000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "局部图案",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "436.150000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "366.000000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "HARE",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "蕾丝",
+          "织造方式": "机织",
+          "肌理": "蕾丝",
+          "商品数": 3,
+          "平均价格": "732.000000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "BAYFLOW",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "498.550000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "BAYFLOW",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "结子布",
+          "商品数": 2,
+          "平均价格": "498.550000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "Elura",
+          "图案": "叶子",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "缎纹",
+          "商品数": 2,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "Elura",
+          "图案": "点",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "绉纹",
+          "商品数": 2,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "Elura",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "缎纹",
+          "商品数": 2,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "休闲裤",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "526.860000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 51,
+          "平均价格": "76.549020"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 15,
+          "平均价格": "27.230400"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 8,
+          "平均价格": "110.855000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 7,
+          "平均价格": "86.558000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 6,
+          "平均价格": "21.350000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GEORGE’S",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 5,
+          "平均价格": "172.542857"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 5,
+          "平均价格": "290.116000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GEORGE’S",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "93.025000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "mood is me",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "102.937500"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "mood is me",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "122.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GEORGE’S",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 3,
+          "平均价格": "176.900000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GLOBAL WORK",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "762.500000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "61.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "维希格",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "18.300000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 3,
+          "平均价格": "805.200000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 3,
+          "平均价格": "805.200000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "studio CLIP",
+          "图案": "花卉图案",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "钉珠",
+          "织造方式": "机织",
+          "肌理": "钉珠",
+          "商品数": 3,
+          "平均价格": "138.100000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "BAYFLOW",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "549.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "BAYFLOW",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "皮革/PU革",
+          "商品数": 2,
+          "平均价格": "359.900000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "Elura",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "网眼布",
+          "商品数": 2,
+          "平均价格": "481.900000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "Elura",
+          "图案": "方形",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "缎纹",
+          "商品数": 2,
+          "平均价格": "286.700000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GEORGE’S",
+          "图案": "文字",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "103.700000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GEORGE’S",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "压花",
+          "商品数": 2,
+          "平均价格": "73.200000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GLOBAL WORK",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "钉珠",
+          "商品数": 2,
+          "平均价格": "97.600000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "JEANASIS",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "水洗牛仔布",
+          "商品数": 2,
+          "平均价格": "244.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "物体",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "18.300000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "18.300000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "金属涂层",
+          "商品数": 2,
+          "平均价格": "42.700000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "维希格",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "18.300000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LOWRYS FARM",
+          "图案": "卡通人物（拟人化物体）",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "卡通/动漫风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "183.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "mood is me",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "158.600000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "niko and ...",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "73.200000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "金属涂层",
+          "商品数": 2,
+          "平均价格": "103.700000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "repipi armario",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "水洗牛仔布",
+          "商品数": 2,
+          "平均价格": "165.860000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "repipi armario",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "水洗牛仔布",
+          "商品数": 2,
+          "平均价格": "219.600000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "studio CLIP",
+          "图案": "其他",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "卡通/动漫风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "毛圈",
+          "商品数": 2,
+          "平均价格": "48.800000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "studio CLIP",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "143.350000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "studio CLIP",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "卡通/动漫风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "毛圈",
+          "商品数": 2,
+          "平均价格": "48.800000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GEORGE’S",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "134.200000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "GEORGE’S",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "256.200000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "HARE",
+          "图案": "其他",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "提花",
+          "商品数": 1,
+          "平均价格": "183.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "HARE",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "388.140000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "JEANASIS",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "亮片",
+          "商品数": 1,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LAKOLE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "雪纺",
+          "商品数": 1,
+          "平均价格": "18.300000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LOWRYS FARM",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "244.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "LOWRYS FARM",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "732.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "3019.500000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "3019.500000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "3690.500000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 1,
+          "平均价格": "503.250000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "局部图案",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "拼贴",
+          "织造方式": "机织",
+          "肌理": "网眼布",
+          "商品数": 1,
+          "平均价格": "2616.900000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "刺绣",
+          "商品数": 1,
+          "平均价格": "3891.800000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "THE NORTH FACE",
+          "图案": "钻石",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 1,
+          "平均价格": "1006.500000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "篮格组织",
+          "商品数": 1,
+          "平均价格": "329.400000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "20.740000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "叶子",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "244.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "树",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "244.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "TODAY’S SPECIAL",
+          "图案": "物体",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "244.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "niko and ...",
+          "图案": "条纹",
+          "图案定义": "具象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "671.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "具象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "671.000000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "studio CLIP",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "网眼布",
+          "商品数": 1,
+          "平均价格": "91.500000"
+        },
+        {
+          "二级类目": "其他",
+          "品牌": "studio CLIP",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "摇粒绒",
+          "商品数": 1,
+          "平均价格": "48.800000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "2348.500000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "2348.500000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "2348.500000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "2348.500000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "压花",
+          "织造方式": "机织",
+          "肌理": "压花",
+          "商品数": 2,
+          "平均价格": "5871.250000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格，插画效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "637.450000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "物体",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格，插画效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "637.450000"
+        },
+        {
+          "二级类目": "冲锋衣",
+          "品牌": "THE NORTH FACE",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "压花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 1,
+          "平均价格": "5368.000000"
+        },
+        {
+          "二级类目": "冲锋裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "637.450000"
+        },
+        {
+          "二级类目": "冲锋裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "637.450000"
+        },
+        {
+          "二级类目": "冲锋裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "皱褶",
+          "商品数": 3,
+          "平均价格": "1174.250000"
+        },
+        {
+          "二级类目": "冲锋裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 1,
+          "平均价格": "1677.500000"
+        },
+        {
+          "二级类目": "冲锋裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 1,
+          "平均价格": "1677.500000"
+        },
+        {
+          "二级类目": "冲锋裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 1,
+          "平均价格": "1677.500000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "HARE",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "提花",
+          "商品数": 3,
+          "平均价格": "829.600000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "皱褶",
+          "商品数": 3,
+          "平均价格": "1040.050000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "A part by",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "732.000000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "GLOBAL WORK",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "蕾丝",
+          "织造方式": "机织",
+          "肌理": "蕾丝",
+          "商品数": 2,
+          "平均价格": "387.650000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "HARE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "549.000000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "LOWRYS FARM",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "麂皮绒",
+          "商品数": 2,
+          "平均价格": "332.210000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "mysty woman",
+          "图案": "点",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "549.000000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "niko and ...",
+          "图案": "波浪纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "提花",
+          "商品数": 2,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "niko and ...",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "蕾丝",
+          "织造方式": "机织",
+          "肌理": "蕾丝",
+          "商品数": 2,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "niko and ...",
+          "图案": "未知",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "未知",
+          "工艺类型": "印花，扎染",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "366.000000"
+        },
+        {
+          "二级类目": "半身裙",
+          "品牌": "niko and ...",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "提花",
+          "商品数": 1,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "Elura",
+          "图案": "点",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "绉纹",
+          "商品数": 4,
+          "平均价格": "366.000000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "绉纹",
+          "商品数": 3,
+          "平均价格": "427.000000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "ALAND",
+          "图案": "人物图案（人形，人体）",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "859.000000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "ALAND",
+          "图案": "卡通人物（拟人化物体）",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "859.000000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "ALAND",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "859.000000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "366.000000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "LEPSIM",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "蕾丝",
+          "织造方式": "纬编",
+          "肌理": "蕾丝",
+          "商品数": 2,
+          "平均价格": "276.760000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "ALAND",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "网眼布",
+          "商品数": 1,
+          "平均价格": "592.860000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "GLOBAL WORK",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "刺绣",
+          "织造方式": "纬编",
+          "肌理": "棱条肌理",
+          "商品数": 1,
+          "平均价格": "332.210000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "niko and ...",
+          "图案": "卡通人物（拟人化物体）",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "249.550000"
+        },
+        {
+          "二级类目": "卫衣",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "孕妇衣",
+          "品牌": "Heather",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "549.000000"
+        },
+        {
+          "二级类目": "孕妇衣",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "499.100000"
+        },
+        {
+          "二级类目": "工装裤",
+          "品牌": "HARE",
+          "图案": "花卉图案",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "994.300000"
+        },
+        {
+          "二级类目": "工装裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "压花",
+          "织造方式": "机织",
+          "肌理": "压花",
+          "商品数": 1,
+          "平均价格": "5837.700000"
+        },
+        {
+          "二级类目": "工装裤",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "斜纹",
+          "商品数": 1,
+          "平均价格": "554.550000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "局部图案",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "斜纹",
+          "商品数": 4,
+          "平均价格": "369.050000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "repipi armario",
+          "图案": "品牌标识",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "水洗牛仔布",
+          "商品数": 4,
+          "平均价格": "256.200000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "repipi armario",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "水洗牛仔布",
+          "商品数": 4,
+          "平均价格": "256.200000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "niko and ...",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "221.310000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "niko and ...",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "165.860000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "RAGEBLUE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "斜纹",
+          "商品数": 2,
+          "平均价格": "244.000000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "BAYFLOW",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "396.500000"
+        },
+        {
+          "二级类目": "帽子",
+          "品牌": "repipi armario",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "砂洗面料",
+          "商品数": 1,
+          "平均价格": "231.800000"
+        },
+        {
+          "二级类目": "手套",
+          "品牌": "THE NORTH FACE",
+          "图案": "品牌标识",
+          "图案定义": "抽象图案",
+          "图案布局": "局部图案，独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 2,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "手套",
+          "品牌": "THE NORTH FACE",
+          "图案": "点",
+          "图案定义": "抽象图案",
+          "图案布局": "局部图案，独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 2,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "手套",
+          "品牌": "THE NORTH FACE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "局部图案，独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "涂层/轧光面料",
+          "商品数": 2,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "毛衫",
+          "品牌": "mysty woman",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "网眼布",
+          "商品数": 3,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "毛衫",
+          "品牌": "mysty woman",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "皱褶",
+          "商品数": 3,
+          "平均价格": "549.000000"
+        },
+        {
+          "二级类目": "毛衫",
+          "品牌": "HARE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "384.300000"
+        },
+        {
+          "二级类目": "牛仔外套",
+          "品牌": "studio CLIP",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "水洗牛仔布",
+          "商品数": 1,
+          "平均价格": "459.760000"
+        },
+        {
+          "二级类目": "牛仔裤",
+          "品牌": "HARE",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "水洗牛仔布",
+          "商品数": 4,
+          "平均价格": "732.000000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "GEORGE’S",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 6,
+          "平均价格": "289.750000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "GEORGE’S",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "366.000000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "LOWRYS FARM",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "独幅",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "332.210000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "速写效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "数字",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "速写效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "速写效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "THE NORTH FACE",
+          "图案": "科技",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "速写效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "BAYFLOW",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "332.210000"
+        },
+        {
+          "二级类目": "短裤",
+          "品牌": "niko and ...",
+          "图案": "佩斯利",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "未知",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "HARE",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "棱条肌理",
+          "商品数": 6,
+          "平均价格": "183.000000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "A part by",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "457.500000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "niko and ...",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "蕾丝",
+          "商品数": 3,
+          "平均价格": "277.310000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "249.550000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "studio CLIP",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "蕾丝",
+          "商品数": 3,
+          "平均价格": "176.900000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "Elura",
+          "图案": "花卉图案",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "未知",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "缎纹",
+          "商品数": 2,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "niko and ...",
+          "图案": "格纹",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "复古风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "绉纹",
+          "商品数": 2,
+          "平均价格": "249.550000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "天鹅绒",
+          "商品数": 2,
+          "平均价格": "166.410000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "studio CLIP",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "481.900000"
+        },
+        {
+          "二级类目": "背心",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "雪纺",
+          "商品数": 1,
+          "平均价格": "277.310000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "A part by",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "579.500000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "RAGEBLUE",
+          "图案": "格纹",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "332.210000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "提花",
+          "商品数": 3,
+          "平均价格": "366.000000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "格纹",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "studio CLIP",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "蕾丝",
+          "商品数": 3,
+          "平均价格": "520.760000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "GEORGE’S",
+          "图案": "佩斯利",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "427.000000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "GEORGE’S",
+          "图案": "树",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "387.350000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "GEORGE’S",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "387.350000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "GEORGE’S",
+          "图案": "风景",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "插画效果",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "387.350000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "RAGEBLUE",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "牛津布",
+          "商品数": 2,
+          "平均价格": "554.000000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "格纹",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "物体",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "卡通/动漫风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "388.200000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "亚麻/苎麻布",
+          "商品数": 2,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "食品/饮料",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "卡通/动漫风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "388.200000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "studio CLIP",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "蕾丝",
+          "织造方式": "纬编",
+          "肌理": "蕾丝",
+          "商品数": 2,
+          "平均价格": "337.760000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "studio CLIP",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "刺绣，提花，蕾丝",
+          "织造方式": "机织",
+          "肌理": "提花",
+          "商品数": 2,
+          "平均价格": "420.900000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "305.000000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣，印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "443.650000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "条纹",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣，印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "443.650000"
+        },
+        {
+          "二级类目": "衬衫",
+          "品牌": "niko and ...",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "刺绣",
+          "商品数": 1,
+          "平均价格": "332.750000"
+        },
+        {
+          "二级类目": "袜子",
+          "品牌": "LOWRYS FARM",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "棱条肌理",
+          "商品数": 5,
+          "平均价格": "30.500000"
+        },
+        {
+          "二级类目": "袜子",
+          "品牌": "LOWRYS FARM",
+          "图案": "文字",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "单元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "棱条肌理",
+          "商品数": 5,
+          "平均价格": "30.500000"
+        },
+        {
+          "二级类目": "袜子",
+          "品牌": "LOWRYS FARM",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "手绘风",
+          "工艺类型": "扎染",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 4,
+          "平均价格": "30.500000"
+        },
+        {
+          "二级类目": "西装外套",
+          "品牌": "BAYFLOW",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "414.800000"
+        },
+        {
+          "二级类目": "西装外套",
+          "品牌": "GLOBAL WORK",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "831.310000"
+        },
+        {
+          "二级类目": "西裤",
+          "品牌": "studio CLIP",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "298.900000"
+        },
+        {
+          "二级类目": "西裤",
+          "品牌": "BAYFLOW",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "498.550000"
+        },
+        {
+          "二级类目": "西裤",
+          "品牌": "studio CLIP",
+          "图案": "其他",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "亚麻/苎麻布",
+          "商品数": 2,
+          "平均价格": "387.650000"
+        },
+        {
+          "二级类目": "西裤",
+          "品牌": "ALAND",
+          "图案": "品牌标识",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "天鹅绒",
+          "商品数": 1,
+          "平均价格": "610.000000"
+        },
+        {
+          "二级类目": "西裤",
+          "品牌": "ALAND",
+          "图案": "字母",
+          "图案定义": "具象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "天鹅绒",
+          "商品数": 1,
+          "平均价格": "610.000000"
+        },
+        {
+          "二级类目": "西裤",
+          "品牌": "LOWRYS FARM",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "387.650000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 3,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "studio CLIP",
+          "图案": "花卉图案",
+          "图案定义": "具象图案",
+          "图案布局": "独幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "刺绣",
+          "织造方式": "机织",
+          "肌理": "蕾丝",
+          "商品数": 3,
+          "平均价格": "603.900000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "A part by",
+          "图案": "条纹",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "印花",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "915.000000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "A part by",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "单元素图案",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "泡泡纱",
+          "商品数": 2,
+          "平均价格": "732.000000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "Elura",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 2,
+          "平均价格": "488.000000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "GLOBAL WORK",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "未知",
+          "工艺类型": "未知",
+          "织造方式": "纬编",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "443.100000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "HARE",
+          "图案": "纯色",
+          "图案定义": "抽象图案",
+          "图案布局": "未知",
+          "图案构成": "未知",
+          "图案风格": "简约风格",
+          "工艺类型": "未知",
+          "织造方式": "机织",
+          "肌理": "平纹",
+          "商品数": 1,
+          "平均价格": "719.800000"
+        },
+        {
+          "二级类目": "连衣裙",
+          "品牌": "Heather",
+          "图案": "点",
+          "图案定义": "抽象图案",
+          "图案布局": "满幅",
+          "图案构成": "多元素图案",
+          "图案风格": "简约风格",
+          "工艺类型": "提花",
+          "织造方式": "机织",
+          "肌理": "提花",
+          "商品数": 1,
+          "平均价格": "488.000000"
+        }
+      ],
+      "insight_summary": [
+        "本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "read_only_sql",
+          "passed": true
+        },
+        {
+          "type": "single_statement",
+          "passed": true
+        },
+        {
+          "type": "mysql_identifier_quotes",
+          "passed": true,
+          "normalized": false
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_competitor",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local",
+        "host": "127.0.0.1",
+        "provider": "codex_cli",
+        "mode": "cli"
+      }
+    },
+    "query_2872004216": {
+      "query_id": "query_2872004216",
+      "session_id": "sess_c607d96a15",
+      "task_id": null,
+      "query_plan_id": "qp_13e177e46d",
+      "sql": "WITH base AS (\n  SELECT\n    ci.`BrandName` AS brand,\n    ci.`SubCategory` AS sub_category,\n    ci.`Id` AS product_id,\n    ci.`Price` AS price\n  FROM clothing_info ci\n  WHERE ci.`ReceiveTime` >= CURRENT_DATE - INTERVAL '30 day'\n    AND ci.`SubCategory` = :subcategory\n    AND ci.`Price` IS NOT NULL\n), bucketed AS (\n  SELECT\n    brand,\n    sub_category,\n    product_id,\n    CASE\n      WHEN price < 100 THEN '0-99'\n      WHEN price < 200 THEN '100-199'\n      WHEN price < 300 THEN '200-299'\n      WHEN price < 500 THEN '300-499'\n      WHEN price < 1000 THEN '500-999'\n      ELSE '1000+'\n    END AS price_band\n  FROM base\n)\nSELECT\n  brand,\n  sub_category,\n  price_band,\n  COUNT(DISTINCT product_id) AS product_count\nFROM bucketed\nGROUP BY brand, sub_category, price_band\nORDER BY brand, sub_category,\n  CASE price_band\n    WHEN '0-99' THEN 1\n    WHEN '100-199' THEN 2\n    WHEN '200-299' THEN 3\n    WHEN '300-499' THEN 4\n    WHEN '500-999' THEN 5\n    ELSE 6\n  END;",
+      "sql_explanation": "MySQL 查询执行失败。",
+      "status": "failed",
+      "rows_count": 0,
+      "duration_ms": 6,
+      "result_preview": [],
+      "insight_summary": [
+        "MySQL 执行失败: (1064, \"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ':subcategory\\n    AND ci.`Price` IS NOT NULL\\n), bucketed AS (\\n  SELECT\\n    brand,' at line 9\")"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "mysql_execution",
+          "passed": false
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_competitor",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local"
+      }
+    },
+    "query_a40c5c7dbf": {
+      "query_id": "query_a40c5c7dbf",
+      "session_id": "sess_139d350379",
+      "task_id": null,
+      "query_plan_id": "qp_9be2c50e40",
+      "sql": "WITH base AS (SELECT Id, BrandName, SubCategory, Price FROM clothing_info WHERE ReceiveTime >= CURRENT_DATE - INTERVAL '30 day' AND SubCategory IS NOT NULL AND Price IS NOT NULL) SELECT BrandName AS brand, SubCategory AS sub_category, CASE WHEN Price < 100 THEN '0-99' WHEN Price >= 100 AND Price < 300 THEN '100-299' WHEN Price >= 300 AND Price < 500 THEN '300-499' WHEN Price >= 500 AND Price < 1000 THEN '500-999' WHEN Price >= 1000 AND Price < 2000 THEN '1000-1999' ELSE '2000+' END AS price_band, COUNT(DISTINCT Id) AS product_count, ROUND(COUNT(DISTINCT Id) * 1.0 / SUM(COUNT(DISTINCT Id)) OVER (PARTITION BY BrandName, SubCategory), 4) AS band_ratio FROM base GROUP BY BrandName, SubCategory, CASE WHEN Price < 100 THEN '0-99' WHEN Price >= 100 AND Price < 300 THEN '100-299' WHEN Price >= 300 AND Price < 500 THEN '300-499' WHEN Price >= 500 AND Price < 1000 THEN '500-999' WHEN Price >= 1000 AND Price < 2000 THEN '1000-1999' ELSE '2000+' END ORDER BY BrandName, SubCategory, price_band",
+      "sql_explanation": "MySQL 查询执行失败。",
+      "status": "failed",
+      "rows_count": 0,
+      "duration_ms": 7,
+      "result_preview": [],
+      "insight_summary": [
+        "MySQL 执行失败: (1064, \"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ') SELECT BrandName AS brand, SubCategory AS sub_category, CASE WHEN Price < 100 ' at line 1\")"
+      ],
+      "chart_suggestion": "table",
+      "safety_checks": [
+        {
+          "type": "mysql_execution",
+          "passed": false
+        }
+      ],
+      "lineage": {
+        "scene_id": "scene_prd_competitor",
+        "scene_version": "scene_v1",
+        "execution_mode": "mysql_raw",
+        "database": "dataservice_test_local"
+      }
+    }
+  },
+  "slide_drafts": {
+    "sess_4f0ee3fc6f": {
+      "slide_id": "slide_a6b3acd179",
+      "session_id": "sess_4f0ee3fc6f",
+      "task_id": null,
+      "query_id": "query_55dc91af05",
+      "page_type": "comparison",
+      "title": "品牌 vs 场景标签对比分析",
+      "subtitle": "Presenton AI 导出 · 分析各品牌在不同平台的销售价差异并生成汇报",
+      "chart_spec": {
+        "chart_type": "table",
+        "x_field": "品牌",
+        "series_field": "场景标签",
+        "y_field": "平均价格",
+        "rows": [
+          {
+            "品牌": "A part by",
+            "场景标签": "差旅/商务",
+            "平均价格": "457.500000"
+          },
+          {
+            "品牌": "A part by",
+            "场景标签": "生活/休闲",
+            "平均价格": "649.884615"
+          },
+          {
+            "品牌": "ALAND",
+            "场景标签": "生活/休闲",
+            "平均价格": "730.215000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "差旅/商务",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "徒步/登山",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "生活/休闲",
+            "平均价格": "431.167778"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "跑步",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "露营",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "高尔夫",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "Elura",
+            "场景标签": "差旅/商务",
+            "平均价格": "488.000000"
+          }
+        ],
+        "ppt_scheme": "presenton_ai",
+        "ppt_scheme_name": "Presenton AI PPT 生成"
+      },
+      "findings": [
+        "本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local",
+        "关键数据：返回行数=52；预览行数=52；字段数=3；平均价格 最大=3,892",
+        "来源链路：query=query_55dc91af05"
+      ],
+      "narrative": "本页围绕“分析各品牌在不同平台的销售价差异并生成汇报”组织分析结果，作为 Presenton 大模型生成 PPT 的结构化输入。 当前结果字段包括 品牌, 场景标签, 平均价格，导出阶段会把结论、数据预览和生成指令发送给 Presenton。",
+      "recommendations": [
+        "核对标题、结论和口径",
+        "批准入 Deck 后调用 Presenton 生成 PPTX",
+        "下载后检查版式与可编辑内容"
+      ],
+      "lineage_summary": {
+        "session_id": "sess_4f0ee3fc6f",
+        "ppt_scheme": "presenton_ai",
+        "ppt_scheme_name": "Presenton AI PPT 生成",
+        "insight_service": "rule_based_v1",
+        "result_profile": {
+          "rows_count": 52,
+          "preview_rows": 52,
+          "columns": [
+            "品牌",
+            "场景标签",
+            "平均价格"
+          ],
+          "numeric_columns": [
+            "平均价格"
+          ],
+          "primary_numeric": "平均价格",
+          "column_stats": {
+            "平均价格": {
+              "min": 33.46303,
+              "max": 3891.8,
+              "avg": 553.2886575961538,
+              "non_null": 52
+            }
+          },
+          "top_rows": [
+            {
+              "品牌": "THE NORTH FACE",
+              "场景标签": "差旅/商务",
+              "平均价格": "3891.800000"
+            },
+            {
+              "品牌": "THE NORTH FACE",
+              "场景标签": "冰雪运动",
+              "平均价格": "3019.500000"
+            },
+            {
+              "品牌": "THE NORTH FACE",
+              "场景标签": "攀岩",
+              "平均价格": "2199.388889"
+            }
+          ]
+        },
+        "key_metrics": [
+          {
+            "label": "返回行数",
+            "value": "52"
+          },
+          {
+            "label": "预览行数",
+            "value": "52"
+          },
+          {
+            "label": "字段数",
+            "value": "3"
+          },
+          {
+            "label": "平均价格 最大",
+            "value": "3,892"
+          },
+          {
+            "label": "平均价格 均值",
+            "value": "553.29"
+          }
+        ],
+        "query_id": "query_55dc91af05",
+        "rows_count": 52,
+        "chart_type": "table"
+      },
+      "status": "approved",
+      "version": 1
+    },
+    "slide_a6b3acd179": {
+      "slide_id": "slide_a6b3acd179",
+      "session_id": "sess_4f0ee3fc6f",
+      "task_id": null,
+      "query_id": "query_55dc91af05",
+      "page_type": "comparison",
+      "title": "品牌 vs 场景标签对比分析",
+      "subtitle": "Presenton AI 导出 · 分析各品牌在不同平台的销售价差异并生成汇报",
+      "chart_spec": {
+        "chart_type": "table",
+        "x_field": "品牌",
+        "series_field": "场景标签",
+        "y_field": "平均价格",
+        "rows": [
+          {
+            "品牌": "A part by",
+            "场景标签": "差旅/商务",
+            "平均价格": "457.500000"
+          },
+          {
+            "品牌": "A part by",
+            "场景标签": "生活/休闲",
+            "平均价格": "649.884615"
+          },
+          {
+            "品牌": "ALAND",
+            "场景标签": "生活/休闲",
+            "平均价格": "730.215000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "差旅/商务",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "徒步/登山",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "生活/休闲",
+            "平均价格": "431.167778"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "跑步",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "露营",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "BAYFLOW",
+            "场景标签": "高尔夫",
+            "平均价格": "396.500000"
+          },
+          {
+            "品牌": "Elura",
+            "场景标签": "差旅/商务",
+            "平均价格": "488.000000"
+          }
+        ],
+        "ppt_scheme": "presenton_ai",
+        "ppt_scheme_name": "Presenton AI PPT 生成"
+      },
+      "findings": [
+        "本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local",
+        "关键数据：返回行数=52；预览行数=52；字段数=3；平均价格 最大=3,892",
+        "来源链路：query=query_55dc91af05"
+      ],
+      "narrative": "本页围绕“分析各品牌在不同平台的销售价差异并生成汇报”组织分析结果，作为 Presenton 大模型生成 PPT 的结构化输入。 当前结果字段包括 品牌, 场景标签, 平均价格，导出阶段会把结论、数据预览和生成指令发送给 Presenton。",
+      "recommendations": [
+        "核对标题、结论和口径",
+        "批准入 Deck 后调用 Presenton 生成 PPTX",
+        "下载后检查版式与可编辑内容"
+      ],
+      "lineage_summary": {
+        "session_id": "sess_4f0ee3fc6f",
+        "ppt_scheme": "presenton_ai",
+        "ppt_scheme_name": "Presenton AI PPT 生成",
+        "insight_service": "rule_based_v1",
+        "result_profile": {
+          "rows_count": 52,
+          "preview_rows": 52,
+          "columns": [
+            "品牌",
+            "场景标签",
+            "平均价格"
+          ],
+          "numeric_columns": [
+            "平均价格"
+          ],
+          "primary_numeric": "平均价格",
+          "column_stats": {
+            "平均价格": {
+              "min": 33.46303,
+              "max": 3891.8,
+              "avg": 553.2886575961538,
+              "non_null": 52
+            }
+          },
+          "top_rows": [
+            {
+              "品牌": "THE NORTH FACE",
+              "场景标签": "差旅/商务",
+              "平均价格": "3891.800000"
+            },
+            {
+              "品牌": "THE NORTH FACE",
+              "场景标签": "冰雪运动",
+              "平均价格": "3019.500000"
+            },
+            {
+              "品牌": "THE NORTH FACE",
+              "场景标签": "攀岩",
+              "平均价格": "2199.388889"
+            }
+          ]
+        },
+        "key_metrics": [
+          {
+            "label": "返回行数",
+            "value": "52"
+          },
+          {
+            "label": "预览行数",
+            "value": "52"
+          },
+          {
+            "label": "字段数",
+            "value": "3"
+          },
+          {
+            "label": "平均价格 最大",
+            "value": "3,892"
+          },
+          {
+            "label": "平均价格 均值",
+            "value": "553.29"
+          }
+        ],
+        "query_id": "query_55dc91af05",
+        "rows_count": 52,
+        "chart_type": "table"
+      },
+      "status": "approved",
+      "version": 1
+    }
+  },
+  "decks": {
+    "deck_506d480466": {
+      "deck_id": "deck_506d480466",
+      "session_id": "sess_4f0ee3fc6f",
+      "title": "Deck for 分析各品牌在不同平台的销售价差异并生成汇报",
+      "slide_ids": [
+        "slide_a6b3acd179"
+      ],
+      "status": "exported"
+    }
+  },
+  "artifacts": {
+    "artifact_743aa6e957": {
+      "artifact_id": "artifact_743aa6e957",
+      "artifact_type": "pptx",
+      "file_name": "deck_506d480466.pptx",
+      "download_url": "/api/v1/artifacts/artifact_743aa6e957/download",
+      "local_path": "runtime_data/artifacts/deck_506d480466.pptx",
+      "session_id": "sess_4f0ee3fc6f",
+      "deck_id": "deck_506d480466"
+    },
+    "artifact_81d89924cb": {
+      "artifact_id": "artifact_81d89924cb",
+      "artifact_type": "pptx",
+      "file_name": "deck_506d480466.pptx",
+      "download_url": "/api/v1/artifacts/artifact_81d89924cb/download",
+      "local_path": "runtime_data/artifacts/deck_506d480466.pptx",
+      "session_id": "sess_4f0ee3fc6f",
+      "deck_id": "deck_506d480466"
+    },
+    "artifact_5efd2782a4": {
+      "artifact_id": "artifact_5efd2782a4",
+      "artifact_type": "pptx",
+      "file_name": "deck_506d480466.pptx",
+      "download_url": "/api/v1/artifacts/artifact_5efd2782a4/download",
+      "local_path": "runtime_data/artifacts/deck_506d480466.pptx",
+      "session_id": "sess_4f0ee3fc6f",
+      "deck_id": "deck_506d480466"
+    }
+  },
+  "preferences": {
+    "default_user": {
+      "user_id": "default_user",
+      "ppt_tone": "professional",
+      "ppt_template": "corporate_default",
+      "preferred_chart_types": [
+        "bar",
+        "line"
+      ],
+      "default_language": "zh-CN"
+    }
+  },
+  "memory_entries": {},
+  "deerflow_chat_turns": {}
+}

@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FZ 智能分析工作台</title>
+    <link rel="stylesheet" href="./styles.css?v=20260509-presenton-ai" />
+  </head>
+  <body>
+    <div class="app-bg"></div>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <section class="panel">
+          <div class="section-head">
+            <h2>场景创建</h2>
+            <button id="toggleCreateSceneBtn" class="secondary compact-btn">展开</button>
+          </div>
+          <div id="createSceneWrap" hidden>
+            <label class="label" for="sceneName">场景名称</label>
+            <input id="sceneName" placeholder="如：品牌平台价格分析" value="品牌平台价格分析" />
+            <label class="label" for="sceneDesc">场景描述</label>
+            <textarea id="sceneDesc" placeholder="如：围绕品牌/平台价格结构进行分析">围绕品牌/平台价格结构进行分析</textarea>
+            <button id="createSceneBtn">创建场景</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>选择场景</h2>
+            <button id="toggleScenesBtn" class="secondary compact-btn">收起</button>
+          </div>
+          <div id="scenePickerWrap">
+            <div id="scenePickerList" class="list compact-list"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>创建会话</h2>
+          <p id="createSessionSceneHint" class="muted">当前场景：未选择</p>
+          <textarea id="goalInput" placeholder="分析目标">分析各品牌在不同平台的销售价差异并生成汇报</textarea>
+          <button id="createSessionBtn">创建会话</button>
+        </section>
+      </aside>
+
+      <main class="content">
+        <section id="topbar" class="topbar card meta-hidden">
+          <div id="topbarMeta" class="topbar-meta" hidden>
+            <h2 id="sessionTitle"></h2>
+            <p class="muted" id="sessionMeta"></p>
+          </div>
+          <div class="actions topbar-actions">
+            <input
+              id="backendBase"
+              class="topbar-backend-input"
+              value="http://127.0.0.1:18900"
+              placeholder="数据源 API 地址，例如 http://127.0.0.1:18900"
+            />
+            <span id="currentSceneHint" class="muted topbar-current-scene"></span>
+          </div>
+        </section>
+
+        <nav class="tabs card" role="tablist" aria-label="工作区标签">
+          <button id="tabBtnOverview" class="tab-btn" data-tab-target="overview" role="tab" aria-selected="false">总览</button>
+          <button id="tabBtnConfig" class="tab-btn active" data-tab-target="config" role="tab" aria-selected="true">配置中心</button>
+          <button id="tabBtnClothing" class="tab-btn" data-tab-target="clothing" role="tab" aria-selected="false">服装检索</button>
+          <button id="tabBtnQuery" class="tab-btn" data-tab-target="query" role="tab" aria-selected="false">查询执行</button>
+          <button id="tabBtnDelivery" class="tab-btn" data-tab-target="delivery" role="tab" aria-selected="false">汇报产物</button>
+        </nav>
+
+        <section class="tab-panel" data-tab-panel="overview">
+          <section class="grid">
+            <article class="card">
+              <div class="section-head">
+                <h3>Scenes</h3>
+                <button id="toggleScenesBtnOverview" class="secondary compact-btn">收起</button>
+              </div>
+              <div id="scenesOverviewWrap">
+                <div id="scenesList" class="list compact-list"></div>
+              </div>
+            </article>
+            <article class="card">
+              <h3>Sessions</h3>
+              <div id="sessionsList" class="list"></div>
+            </article>
+            <article class="card span-2">
+              <h3>Bridge / Thread</h3>
+              <pre id="bridgeView" class="json"></pre>
+            </article>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="clothing">
+          <section class="card clothing-card">
+            <div class="section-head">
+              <h3>服装检索</h3>
+              <p id="clothingMeta" class="muted">加载中...</p>
+            </div>
+            <div class="clothing-filters">
+              <select id="clothingBrand">
+                <option value="">全部品牌</option>
+              </select>
+              <select id="clothingCategory">
+                <option value="">全部一级类目</option>
+              </select>
+              <select id="clothingSubCategory">
+                <option value="">全部二级类目</option>
+              </select>
+              <select id="clothingScene">
+                <option value="">全部场景</option>
+              </select>
+              <select id="clothingFiber">
+                <option value="">全部材质</option>
+              </select>
+              <input id="clothingMinPrice" type="number" placeholder="最低价" />
+              <input id="clothingMaxPrice" type="number" placeholder="最高价" />
+              <button id="clothingSearchBtn">查询</button>
+              <button id="clothingResetBtn" class="secondary">重置</button>
+            </div>
+            <div class="clothing-layout">
+              <div id="clothingList" class="list"></div>
+              <pre id="clothingDetail" class="json"></pre>
+            </div>
+            <div class="clothing-page">
+              <button id="clothingPrevBtn" class="secondary">上一页</button>
+              <button id="clothingNextBtn" class="secondary">下一页</button>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel active" data-tab-panel="config">
+          <section class="grid">
+            <article class="card span-2">
+              <div class="section-head">
+                <h3>当前场景配置</h3>
+                <div class="actions compact-actions">
+                  <button id="toggleSceneConfigBtn" class="secondary compact-btn">展开</button>
+                  <button id="refreshConfigBtn" class="secondary" title="刷新配置">刷新</button>
+                  <button id="refreshDbCacheBtn" class="secondary" title="读取数据库并刷新缓存">DB缓存</button>
+                  <button id="llmRecommendBtn" class="secondary" title="LLM Recommend">推荐</button>
+                  <button id="llmImportBtn" title="导入勾选候选">导入勾选</button>
+                  <button id="llmSqlResultBtn" title="切到查询执行并生成SQL+结果">SQL与结果</button>
+                </div>
+              </div>
+              <div id="sceneConfigWrap">
+                <div id="sceneSummaryWrap" class="scene-summary-grid"></div>
+                <section class="scene-config-list-block">
+                  <div class="section-head scene-config-list-head">
+                    <h4 class="config-subtitle">当前已选择导入清单</h4>
+                    <span id="sceneConfigListHint" class="muted">来源：当前推荐结果中已勾选的字段与关系</span>
+                  </div>
+                  <div id="sceneConfigListSummary" class="muted llm-candidate-summary"></div>
+                  <div class="scene-config-list-grid">
+                    <section class="config-list-pane pane-imported-fields">
+                      <h4 class="config-subtitle">已选字段列表</h4>
+                      <div id="sceneConfigFieldsWrap" class="table-wrap"></div>
+                    </section>
+                    <section class="config-list-pane pane-imported-relations">
+                      <h4 class="config-subtitle">已选关系列表</h4>
+                      <div id="sceneConfigRelationsWrap" class="table-wrap"></div>
+                    </section>
+                  </div>
+                </section>
+                <div class="llm-agent-tools">
+                  <input id="llmGoal" placeholder="推荐目标（可选），如：聚焦品牌-平台价格对比" />
+                </div>
+                <div id="llmCacheStatus" class="muted llm-candidate-summary"></div>
+                <div id="agentWaitHint" class="muted agent-wait-hint" hidden></div>
+                <div id="llmTableCandidates" class="muted llm-candidate-summary"></div>
+                <div class="llm-candidate-tools">
+                  <button id="llmFieldsSelectAllBtn" class="secondary">字段全选</button>
+                  <button id="llmFieldsSelectNoneBtn" class="secondary">字段清空</button>
+                  <button id="llmRelationsSelectAllBtn" class="secondary">关系全选</button>
+                  <button id="llmRelationsSelectNoneBtn" class="secondary">关系清空</button>
+                </div>
+                <div id="llmCandidateSummary" class="muted llm-candidate-summary"></div>
+                <div class="llm-candidate-grid">
+                  <section class="config-list-pane pane-candidate-fields">
+                    <h4 class="config-subtitle">待导入字段（LLM 推荐）</h4>
+                    <div id="llmCandidateFieldsWrap" class="table-wrap"></div>
+                  </section>
+                  <section class="config-list-pane pane-candidate-relations">
+                    <h4 class="config-subtitle">待导入关系（LLM 推荐）</h4>
+                    <div id="llmCandidateRelationsWrap" class="table-wrap"></div>
+                  </section>
+                </div>
+                <details class="debug-details">
+                  <summary>高级信息 / 调试 JSON</summary>
+                  <pre id="sceneConfigView" class="json"></pre>
+                </details>
+              </div>
+            </article>
+            <article class="card span-2 semantic-er-group">
+              <div class="section-head semantic-er-group-head">
+                <h3>场景语义配置区</h3>
+              </div>
+              <div class="semantic-er-grid">
+                <section class="semantic-er-item">
+                  <div class="section-head">
+                    <h3>字段语义</h3>
+                    <div class="inline-actions">
+                      <button id="toggleFieldAdvancedBtn" class="secondary compact-btn">展开增强字段</button>
+                      <button id="toggleSceneFieldsCardBtn" class="secondary compact-btn">展开</button>
+                    </div>
+                  </div>
+                  <div id="sceneFieldsCardWrap">
+                    <div class="inline-form inline-form-toolbar">
+                      <input id="semanticCacheKeyword" placeholder="搜索缓存字段：语义名/table/field/别名" />
+                      <div class="inline-actions">
+                        <button id="semanticCacheSearchBtn" class="secondary">搜索</button>
+                        <button id="semanticCacheSearchClearBtn" class="secondary">清空</button>
+                        <button id="semanticCacheJumpToFormBtn" class="secondary">定位到新增表单</button>
+                      </div>
+                    </div>
+                    <div class="inline-form">
+                      <label class="form-field">
+                        <span class="form-field-label">名称 semantic_name</span>
+                        <input id="fieldSemanticName" placeholder="如 销售额" />
+                      </label>
+                      <label class="form-field form-field-advanced" data-advanced-group="field">
+                        <span class="form-field-label">口径 semantic_definition（可选）</span>
+                        <input id="fieldSemanticDefinition" placeholder="如 销售额口径说明" />
+                      </label>
+                      <label class="form-field form-field-advanced" data-advanced-group="field">
+                        <span class="form-field-label">单位 unit（可选）</span>
+                        <input id="fieldUnit" placeholder="如 元" />
+                      </label>
+                      <label class="form-field form-field-advanced" data-advanced-group="field">
+                        <span class="form-field-label">聚合 aggregation（可选）</span>
+                        <input id="fieldAggregation" placeholder="如 sum / avg / count" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label">table_name</span>
+                        <input id="fieldTableName" placeholder="如 f_order_item" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label">field_name</span>
+                        <input id="fieldName" placeholder="如 pay_amount" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label">别名 aliases（可选）</span>
+                        <input id="fieldAliases" placeholder="逗号分隔" />
+                      </label>
+                      <label class="form-field form-field-advanced" data-advanced-group="field">
+                        <span class="form-field-label">ER路径 er_path（可选）</span>
+                        <input id="fieldErPath" placeholder="如 brand -> category" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label-row">
+                          <span class="form-field-label">角色 role</span>
+                          <button id="fieldRoleHelpBtn" type="button" class="secondary field-help-btn" title="查看角色说明">?</button>
+                        </span>
+                        <select id="fieldRole">
+                          <option value="metric">metric 指标</option>
+                          <option value="dimension">dimension 维度</option>
+                          <option value="time">time 时间</option>
+                          <option value="filter">filter 过滤</option>
+                        </select>
+                      </label>
+                      <div class="form-field form-field-toggle">
+                        <span class="form-field-label">状态 status</span>
+                        <label class="checkbox checkbox-compact">
+                          <input id="fieldEnabled" type="checkbox" checked />
+                          启用
+                        </label>
+                      </div>
+                      <div class="form-field form-field-actions">
+                        <span class="form-field-label">操作</span>
+                        <div class="inline-actions form-actions">
+                          <button id="addFieldBtn">新增字段</button>
+                          <button id="cancelEditFieldBtn" class="secondary" hidden>取消编辑</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div id="semanticCacheFormHint" class="muted">新增模式：填写后点击“新增字段”。</div>
+                    <div id="sceneFieldsWrap" class="table-wrap"></div>
+                  </div>
+                </section>
+                <section class="semantic-er-item">
+                  <div class="section-head">
+                    <h3>ER 关系</h3>
+                    <div class="inline-actions">
+                      <button id="toggleRelationAdvancedBtn" class="secondary compact-btn">展开关系说明</button>
+                      <button id="toggleSceneRelationsCardBtn" class="secondary compact-btn">展开</button>
+                    </div>
+                  </div>
+                  <div id="sceneRelationsCardWrap">
+                    <div class="inline-form">
+                      <label class="form-field">
+                        <span class="form-field-label">left_table</span>
+                        <input id="relationLeftTable" placeholder="如 clothing_info" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label">left_field</span>
+                        <input id="relationLeftField" placeholder="如 ClothingId" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label">right_table</span>
+                        <input id="relationRightTable" placeholder="如 clothing_scene_info" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label">right_field</span>
+                        <input id="relationRightField" placeholder="如 ClothingId" />
+                      </label>
+                      <label class="form-field">
+                        <span class="form-field-label">join_type</span>
+                        <select id="relationJoinType">
+                          <option value="INNER">INNER</option>
+                          <option value="LEFT">LEFT</option>
+                          <option value="RIGHT">RIGHT</option>
+                          <option value="FULL">FULL</option>
+                        </select>
+                      </label>
+                      <label class="form-field form-field-advanced" data-advanced-group="relation">
+                        <span class="form-field-label">关系说明（可选）</span>
+                        <input id="relationNote" placeholder="如 商品与场景扩展表关联" />
+                      </label>
+                      <div class="form-field form-field-actions">
+                        <span class="form-field-label">操作</span>
+                        <div class="inline-actions form-actions">
+                          <button id="addRelationBtn">新增关系</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div id="sceneRelationsWrap" class="table-wrap"></div>
+                  </div>
+                </section>
+              </div>
+            </article>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="query">
+          <section class="grid">
+            <article class="card span-2">
+              <div class="section-head">
+                <h3>问题 / 查询意图</h3>
+                <button id="toggleIntentTemplatesBtn" class="secondary compact-btn">预制问题</button>
+              </div>
+              <div id="intentTemplatesWrap" hidden>
+                <p class="muted">点击下方预制问题，可自动填入意图输入框。</p>
+                <div id="intentTemplateButtons" class="intent-template-list"></div>
+              </div>
+              <textarea id="queryIntentInput" placeholder="例如：各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20"></textarea>
+              <div class="actions compact-actions">
+                <button id="runQueryBtn">生成并执行</button>
+              </div>
+              <p id="querySaveHint" class="muted query-save-hint"></p>
+              <p class="muted">
+                检查三项：FROM/JOIN 是否符合所选关系；SELECT 是否只含已选字段；WHERE 时间与过滤条件是否正确。
+              </p>
+            </article>
+            <article class="card span-2 query-history-card">
+              <div class="section-head">
+                <h3>提问历史</h3>
+                <button id="refreshQueryHistoryBtn" class="secondary compact-btn">刷新</button>
+              </div>
+              <div id="queryHistoryList" class="list query-history-list"></div>
+            </article>
+            <article class="card">
+              <h3>Query Plan（可读）</h3>
+              <pre id="queryPlanView" class="json"></pre>
+            </article>
+            <article class="card">
+              <h3>MySQL SQL & Run</h3>
+              <pre id="queryRunView" class="json"></pre>
+              <div id="queryTableWrap" class="table-wrap"></div>
+            </article>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="delivery">
+          <section class="grid">
+            <article class="card span-2 delivery-history-card">
+              <div class="section-head">
+                <h3>选择提问历史</h3>
+                <button id="refreshDeliveryHistoryBtn" class="secondary compact-btn">刷新</button>
+              </div>
+              <p id="deliverySessionHint" class="muted delivery-session-hint">请选择一条已执行的提问历史后生成汇报产物。</p>
+              <div id="deliveryHistoryList" class="list query-history-list"></div>
+            </article>
+            <article class="card span-2">
+              <div class="section-head">
+                <h3>PPT 导出器</h3>
+                <div class="actions compact-actions">
+                  <select id="pptSchemeSelect" title="选择PPT生成方案">
+                    <optgroup label="AI PPT 生成器">
+                      <option value="presenton_ai">Presenton AI PPT 生成</option>
+                    </optgroup>
+                  </select>
+                  <button id="loadSlideBtn">生成预览</button>
+                  <button id="regenerateSlideBtn" class="secondary">重生成</button>
+                  <button id="approveSlideBtn" class="secondary">批准入Deck</button>
+                  <button id="exportDeckBtn">导出PPT</button>
+                  <a id="downloadArtifactBtn" class="button-link disabled" href="#">下载PPT</a>
+                </div>
+              </div>
+              <p id="pptSchemeHint" class="muted">调用本地或配置的 Presenton 服务，由大模型生成并导出 PPTX。</p>
+              <p id="deliveryActionHint" class="muted delivery-action-hint"></p>
+              <div id="slidePreview" class="slide-preview"></div>
+            </article>
+            <article class="card span-2 slide-editor-card">
+              <div class="section-head">
+                <h3>Slide 结构化编辑</h3>
+                <div class="actions compact-actions">
+                  <button id="saveSlideEditBtn">保存编辑</button>
+                  <button id="resetSlideEditBtn" class="secondary">恢复当前稿</button>
+                </div>
+              </div>
+              <p id="slideEditHint" class="muted">生成预览后可编辑标题、结论、说明、建议和图表类型。</p>
+              <div class="slide-edit-grid">
+                <label class="label">标题
+                  <input id="slideTitleInput" placeholder="Slide 标题" />
+                </label>
+                <label class="label">副标题
+                  <input id="slideSubtitleInput" placeholder="Slide 副标题" />
+                </label>
+                <label class="label">图表类型
+                  <select id="slideChartTypeSelect">
+                    <option value="table">table</option>
+                    <option value="bar">bar</option>
+                    <option value="line">line</option>
+                  </select>
+                </label>
+                <label class="label slide-edit-span">核心结论（每行一条）
+                  <textarea id="slideFindingsInput" placeholder="每行一条核心结论"></textarea>
+                </label>
+                <label class="label slide-edit-span">业务解释
+                  <textarea id="slideNarrativeInput" placeholder="业务解释"></textarea>
+                </label>
+                <label class="label slide-edit-span">下一步建议（每行一条）
+                  <textarea id="slideRecommendationsInput" placeholder="每行一条建议"></textarea>
+                </label>
+              </div>
+            </article>
+            <article class="card">
+              <h3>Slide Draft JSON</h3>
+              <pre id="slideView" class="json"></pre>
+            </article>
+            <article class="card">
+              <h3>Deck / Artifact</h3>
+              <pre id="deckView" class="json"></pre>
+            </article>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="guideDialog" class="guide-dialog">
+      <div class="guide-head">
+        <h3>DeerFlow 中文上手清单</h3>
+        <button id="closeGuideBtn" class="secondary">关闭</button>
+      </div>
+      <div class="guide-body">
+        <p>适用范围：深度调研、任务编排、文件产出、线程记忆、工具调用、报告与网页生成。</p>
+        <p><strong>能力总览</strong>：深度调研（网页检索/抓取/总结）、多步任务编排、生成 <code>md/html/代码</code>、线程内上下文记忆、调用搜索/抓取/文件读写/bash。</p>
+        <p><strong>推荐操作路线</strong>：先定义目标与交付物 → 再给约束（时间、来源、格式）→ 上传材料 → 要求结构化输出 → 让它继续迭代补差。</p>
+        <p><strong>文件上传后怎么分析</strong>：说明文件用途、要抽取的信息、输出格式；例如“读取上传的财报 PDF，抽取收入/毛利/费用/管理层指引，输出中文要点+风险表+3页汇报结构”。</p>
+        <p><strong>如何让它生成网页/报告/代码</strong>：明确目标文件、目录、技术栈、验收标准；例如“生成单文件 HTML 仪表盘，包含图表占位、结论区、下载按钮，并输出到 <code>runtime_data/artifacts/</code>”。</p>
+        <p><strong>可直接复制的提示词</strong></p>
+        <pre class="guide-pre">1. 请对某行业做深度调研：检索近12个月一手资料，按市场规模、竞争格局、价格带、关键玩家、风险点输出中文报告，并附来源链接。
+
+2. 基于上传的 Excel 和 PDF，先识别核心指标口径，再拆成数据清洗、异常检查、趋势分析、结论汇报四个子任务，逐步执行并输出结果文件。
+
+3. 读取这份数据库 schema，生成可执行 SQL 分析方案：先列候选指标和维度，再给 SQL、结果解释、图表建议、PPT 页面结构。
+
+4. 生成一个客户汇报网页：含封面、核心发现、图表区、建议动作、附录来源，输出 html/css/js 文件并说明如何本地预览。
+
+5. 对这个代码仓做技术调研：说明模块职责、启动方式、关键依赖、风险点，并生成一份给新同学的中文上手文档。</pre>
+        <p><strong>高质量任务写法</strong>：目标 + 输入材料 + 分析维度 + 输出格式 + 约束条件 + 是否需要继续迭代。</p>
+      </div>
+    </dialog>
+    <dialog id="fieldRoleHelpDialog" class="guide-dialog mini-guide-dialog">
+      <div class="guide-head">
+        <h3>角色 role 怎么用</h3>
+        <button id="closeFieldRoleHelpBtn" class="secondary" type="button">关闭</button>
+      </div>
+      <div class="guide-body">
+        <p><strong>role</strong> 决定这个字段在分析里扮演什么角色，不是备注，而是会影响后续查询计划。</p>
+        <p><strong>metric 指标</strong>：拿来算数值。例：价格、销售额、销量。</p>
+        <p><strong>dimension 维度</strong>：拿来分组。例：品牌、类目、颜色。</p>
+        <p><strong>time 时间</strong>：拿来看趋势。例：上新时间、创建日期。</p>
+        <p><strong>filter 过滤</strong>：拿来限制范围。例：性别、场景、是否新品。</p>
+        <p><strong>最简单的记法</strong>：</p>
+        <pre class="guide-pre">按品牌看平均价格
+品牌 -> dimension
+价格 -> metric
+
+看最近30天上新趋势
+上新时间 -> time
+价格/商品数 -> metric
+
+只看女装里的品牌分布
+性别 -> filter
+品牌 -> dimension</pre>
+      </div>
+    </dialog>
+    <script src="./main.js?v=20260509-presenton-ai"></script>
+  </body>
+</html>

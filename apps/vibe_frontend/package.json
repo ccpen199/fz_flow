@@ -1,0 +1,10 @@
+{
+  "name": "vibe-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'frontend skeleton pending framework init'",
+    "build": "echo 'frontend skeleton pending framework init'",
+    "typecheck": "echo 'frontend skeleton pending framework init'"
+  }
+}

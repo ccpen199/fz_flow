@@ -1,0 +1,8 @@
+.DS_Store
+.git/
+.venv/
+__pycache__/
+demo/app/__pycache__/
+docs/jd云服务/ch-chjd.pem
+*.log
+*.bak

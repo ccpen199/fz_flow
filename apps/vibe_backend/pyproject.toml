@@ -1,0 +1,16 @@
+[project]
+name = "vibe-backend"
+version = "0.1.0"
+description = "Backend API for Vibe Data Analysis"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.34.0",
+  "pydantic>=2.8.0",
+  "PyMySQL>=1.1.0",
+  "python-pptx>=1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

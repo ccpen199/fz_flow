@@ -1,0 +1,130 @@
+ppt生成是一个循环自主+HITL的过程，其他没问题   
+PPT那块忘说了，要能生成可编辑的PPT 
+就像Claude code用skill生成PPT那种
+
+前后端完全分离，后端可以以api的方式调用
+
+基于deer flow二开
+
+https://github.com/bytedance/deer-flow（已拉取） 这个 集成了skills系统，用户偏好，记忆等
+deep research也是未来我需要的 但是也需要进一步定制  这个项目也支持了 底层agent的框架我希望用langchain出品的deep agent，并支持skills体系
+
+
+
+- 现有三份文档方向基本对，但**还不满足客户最新要求**。
+- 最大缺口有 4 个：
+  - `PPT` 还是“导出能力”描述，**不是循环自主 + HITL 的可编辑 PPT 工作流**
+  - 还没把 **前后端完全分离、后端 API 化** 作为硬约束写透
+  - 还没把 **基于 DeerFlow 二开** 作为主架构落点写成明确方案
+  - 还没把 **Deep Agent + Skills + Memory + Preferences + Deep Research** 的关系收敛成一套统一架构
+
+**目前文档分别覆盖了什么**
+- `Vibe_Data_Analysis_客户展示版与实现方案_v0.1.md:1`
+  - 强在客户演示流程、分阶段交付、售前表达
+  - 弱在工程约束不够硬，尤其是 DeerFlow 二开和前后端分离
+- `Vibe_Data_Analysis_网页流程与技术架构统一方案_v2.md:1`
+  - 强在把当前 demo 页面、接口、流程串起来
+  - 弱在它更像“当前 demo 说明”，不是“客户版目标架构”
+- `vibe-data-analysis-agent-architecture.md:1`
+  - 强在主链路和模块职责
+  - 弱在没有落到 DeerFlow / LangGraph Deep Agent / Skills 的具体集成设计
+
+**和客户要求的差距**
+客户新增硬要求是：
+- `PPT` 生成是一个**循环自主 + HITL** 过程
+- 必须输出**可编辑 PPT**
+- **前后端完全分离**
+- **后端 API 化**
+- **基于 DeerFlow 二开**
+- 底层希望用 **LangChain 系 Deep Agent**
+- 同时保留 **Skills / 用户偏好 / 记忆 / Deep Research**
+
+这几点里：
+- 文档里对 `PPT` 的“可编辑”有提，但**没有把它升级成会话内持续追加、人工确认、重生成、局部编辑、版本回退** 的正式闭环
+- API 化在 `v2` 有接口清单，但**没有升级成独立后端产品形态**
+- DeerFlow 只在你新增要求里出现，**现有三份文档都没把它写成第一原则**
+
+**我的判断**
+- 现有文档**不能直接拿去做正式设计开发**。
+- 这三份文档可以保留，但应该调整角色：
+  - `v0.1` 作为客户沟通版
+  - `v2` 作为当前 demo 对照版
+  - `agent-architecture` 作为旧版概念稿
+- 然后需要新出一份**唯一主方案文档**，把客户最新要求收敛进去。
+
+**建议的新主方案结构**
+建议新建一份总控文档，例如：
+- `Vibe_Data_Analysis_DeerFlow二开总体方案_v1.md`
+
+内容只保留 7 章：
+- **1. 项目目标**
+  - 基于 DeerFlow 二开
+  - 前后端完全分离
+  - 后端 API 化
+- **2. 产品主链路**
+  - 数据接入 → 语义建模 → 分析会话 → SQL/结果 → PPT 页面 → 下一页推荐 → HITL 确认
+- **3. 核心架构**
+  - Frontend
+  - Backend API
+  - DeerFlow Orchestrator
+  - Skills Bus
+  - Memory / Preferences
+  - Deep Research
+  - PPT Agent Loop
+- **4. PPT 专项设计**
+  - 页级生成
+  - 页级确认
+  - 页级编辑
+  - 页级重生成
+  - deck 持续追加
+  - 可编辑 `pptx`
+- **5. DeerFlow 二开点**
+  - 哪些沿用原生能力
+  - 哪些要定制
+- **6. 分阶段开发**
+  - P0 架构重构
+  - P1 会话分析 MVP
+  - P2 PPT 循环 + HITL
+  - P3 Deep Research 融合
+- **7. 验收标准**
+  - 客户演示验收
+  - MVP 验收
+  - 生产化验收
+
+**建议的开发规划**
+- **Phase 0：方案收敛**
+  - 输出唯一主方案文档
+  - 明确 DeerFlow 二开边界
+  - 明确前后端分离接口契约
+- **Phase 1：后端重构**
+  - 把当前 demo 的配置、分析、导出能力改造成独立 API 服务
+  - UI 只消费 API
+- **Phase 2：分析会话接 DeerFlow**
+  - 用 DeerFlow 承接：
+    - Skills
+    - 用户偏好
+    - 记忆
+    - Deep Research
+  - 同时把分析链路做成状态化 agent workflow
+- **Phase 3：PPT Agent Loop**
+  - 每轮分析自动产出 slide draft
+  - 用户 HITL 审核 / 修改 / 重生成
+  - 累积成完整 deck
+  - 导出可编辑 `pptx`
+- **Phase 4：客户版演示与生产化**
+  - 演示场景固化
+  - 日志、权限、审计、成本、回归
+
+**我建议你下一步直接做的事**
+不是继续改老文档，而是：
+- 我来帮你起草一份新的**唯一主方案文档**
+- 然后再把老三份文档标注为：
+  - 客户展示参考
+  - 当前 demo 对照
+  - 旧架构草稿
+
+如果你同意，我下一步就直接产出：
+- `Vibe_Data_Analysis_DeerFlow二开总体方案_v1.md`
+并把客户最新要求完整并入。
+Events
+Output

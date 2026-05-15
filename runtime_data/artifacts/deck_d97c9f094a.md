@@ -1,0 +1,22 @@
+deck_id=deck_d97c9f094a
+session_id=sess_8657404c43
+title=Deck for 分析各品牌在不同平台的销售价差异并生成汇报
+slide_ids=slide_1a5e616bc1
+exporter=python-pptx
+exporter_primary=python-pptx
+presenton_base_url=
+presenton_presentation_id=
+presenton_edit_path=
+presenton_source=
+presenton_data_appendix_slides=0
+exporter_fallback=false
+exporter_error=
+layout=16:9 stable business report
+slide_1_id=slide_1a5e616bc1
+slide_1_title=品牌 vs 场景标签对比分析
+slide_1_page_type=comparison
+slide_1_scheme=presenton_ai
+slide_1_chart_type=table
+slide_1_editable_table=True
+slide_1_editable_chart=True
+slide_1_findings=本轮结果来自 SQL Agent 直连 MySQL：dataservice_test_local | 关键数据：返回行数=52；预览行数=52；字段数=3；平均价格 最大=3,892 | 来源链路：query=query_418e9ce7f6

@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibe Data Analysis Demo</title>
+    <style>
+      :root {
+        --bg: #f6f4ee;
+        --panel: #fffdf8;
+        --ink: #1f2a30;
+        --brand: #0c7c59;
+        --muted: #75808a;
+        --line: #d8d2c5;
+      }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "PingFang SC", sans-serif;
+        background: linear-gradient(130deg, #ece8dd, #f6f4ee 40%, #efe7d6);
+        color: var(--ink);
+      }
+      .wrap {
+        max-width: 1160px;
+        margin: 24px auto;
+        padding: 16px;
+        display: grid;
+        gap: 12px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px;
+      }
+      h1 {
+        margin: 0 0 8px 0;
+        font-size: 24px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      textarea {
+        width: 100%;
+        min-height: 80px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 14px;
+      }
+      button {
+        border: 0;
+        background: var(--brand);
+        color: white;
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+        margin-right: 8px;
+      }
+      .sub {
+        background: #355c7d;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .tiny {
+        font-size: 11px;
+        color: #6a737b;
+        line-height: 1.5;
+      }
+      .tiny-box {
+        background: #f7f3e9;
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        margin-top: 8px;
+      }
+      .sugg {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        margin-top: 8px;
+        font-size: 12px;
+        background: #fffaf0;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 6px;
+      }
+      code, pre {
+        background: #f1ece2;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      pre {
+        padding: 8px;
+        overflow: auto;
+      }
+      @media (max-width: 900px) {
+        .row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Vibe Data Analysis - 客户演示版</h1>
+        <div class="muted">
+          主链路: Goal -> Query Plan -> SQL -> Insight -> Slide -> Next Goal
+        </div>
+      </div>
+      <div class="card">
+        <button id="createSessionBtn">1. 新建会话</button>
+        <span>Session: <strong id="sessionId">未创建</strong></span>
+        <div class="tiny-box tiny">
+          连接数据库前建议准备：数据库类型/地址、只读账号、可访问 schema、表字段元数据、时间字段、主键候选、业务口径（上新/在售/折扣）。<br/>
+          原因：LLM 先靠这些信息定位可用表和过滤条件，避免“SQL能跑但业务口径错误”。
+        </div>
+      </div>
+      <div class="row">
+        <div class="card">
+          <h3>配置中心 - 场景</h3>
+          <input id="sceneName" placeholder="场景名称，如：价格分析场景" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+          <textarea id="sceneDesc" placeholder="场景描述"></textarea>
+          <div style="margin-top:10px">
+            <button id="createSceneBtn">创建场景</button>
+            <button class="sub" id="reloadSceneBtn">刷新场景</button>
+            <button class="sub" id="presetSyncBtn">同步预置场景</button>
+          </div>
+          <h4>场景列表</h4>
+          <select id="sceneSelect" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;"></select>
+        </div>
+        <div class="card">
+          <h3>配置中心 - 字段语义</h3>
+          <input id="fieldTable" placeholder="表名，如 product_snapshot" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+          <input id="fieldName" placeholder="字段名，如 sale_price" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+          <input id="fieldSemantic" placeholder="语义名，如 销售价" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+          <input id="fieldRole" placeholder="角色: metric/dimension/time/filter" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+          <textarea id="fieldDesc" placeholder="字段业务说明"></textarea>
+          <div style="margin-top:10px">
+            <button id="addFieldBtn">新增字段语义</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>配置中心 - ER 关系</h3>
+        <div class="tiny-box tiny">
+          用户不需要“从零画全图”。建议流程：先用系统自动建议关系，再人工确认高置信关系。<br/>
+          价值：减少 join 走错路径、避免重复计数、让结果可解释可复用。
+        </div>
+        <div class="row">
+          <div>
+            <input id="leftTable" placeholder="左表" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+            <input id="leftField" placeholder="左字段" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+          </div>
+          <div>
+            <input id="rightTable" placeholder="右表" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+            <input id="rightField" placeholder="右字段" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+          </div>
+        </div>
+        <input id="joinType" placeholder="JOIN 类型: INNER/LEFT" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;" />
+        <textarea id="relationNote" placeholder="关系说明"></textarea>
+        <div style="margin-top:10px">
+          <button id="addRelationBtn">新增ER关系</button>
+          <button class="sub" id="loadSuggestionsBtn">加载关系建议</button>
+          <button class="sub" id="applyAllSuggestionsBtn">一键采用建议</button>
+        </div>
+        <div id="suggestionsWrap"></div>
+      </div>
+      <div class="card">
+        <h3>当前场景配置详情</h3>
+        <pre id="sceneDetail"></pre>
+      </div>
+      <div class="row">
+        <div class="card">
+          <h3>2. 输入分析目标</h3>
+          <textarea id="goal">请分析最近30天女装外套在不同平台和品牌的价格结构变化，并给出下一步建议。</textarea>
+          <div class="tiny-box tiny">
+            当前不是单一测试目标。每个场景都内置多条样例目标，可一键填充。
+          </div>
+          <div style="margin-top:8px;">
+            <select id="goalSamples" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;"></select>
+            <div style="margin-top:6px;">
+              <button class="sub" id="useGoalSampleBtn">使用选中目标</button>
+            </div>
+          </div>
+          <div style="margin-top:10px">
+            <button id="analyzeBtn">执行分析</button>
+            <button class="sub" id="exportBtn">导出PPT</button>
+          </div>
+          <h4>推荐下一步</h4>
+          <ul id="recList"></ul>
+        </div>
+        <div class="card">
+          <h3>3. 查询计划</h3>
+          <pre id="plan"></pre>
+          <h3>4. SQL</h3>
+          <pre id="sql"></pre>
+        </div>
+      </div>
+      <div class="card">
+        <h3>5. 结果与洞察</h3>
+        <div id="insight"></div>
+        <h4>数据预览</h4>
+        <div id="tableWrap"></div>
+      </div>
+      <div class="card">
+        <h3>下载</h3>
+        <a id="downloadLink" target="_blank"></a>
+      </div>
+    </div>
+
+    <script>
+      const base = window.location.pathname.startsWith("/fz-workflow/") ? "/fz-workflow" : "";
+      let sessionId = "";
+      let currentSceneId = "";
+      let relationSuggestions = [];
+
+      async function createSession() {
+        const res = await fetch(`${base}/api/sessions`, { method: "POST" });
+        const data = await res.json();
+        sessionId = data.session_id;
+        document.getElementById("sessionId").innerText = sessionId;
+      }
+
+      async function loadScenes() {
+        const res = await fetch(`${base}/api/config/scenes`);
+        const data = await res.json();
+        const select = document.getElementById("sceneSelect");
+        select.innerHTML = "";
+        data.scenes.forEach((s) => {
+          const opt = document.createElement("option");
+          opt.value = s.scene_id;
+          opt.innerText = `${s.name} (${s.scene_id})`;
+          select.appendChild(opt);
+        });
+        if (data.scenes.length > 0) {
+          currentSceneId = select.value;
+          await loadSceneDetail(currentSceneId);
+        } else {
+          currentSceneId = "";
+          document.getElementById("sceneDetail").innerText = "暂无场景";
+        }
+      }
+
+      async function loadSceneDetail(sceneId) {
+        if (!sceneId) return;
+        const res = await fetch(`${base}/api/config/scenes/${sceneId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById("sceneDetail").innerText = JSON.stringify(data, null, 2);
+        const goalSelect = document.getElementById("goalSamples");
+        goalSelect.innerHTML = "";
+        const goals = data.sample_goals || [];
+        if (!goals.length) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.innerText = "当前场景暂无预置目标";
+          goalSelect.appendChild(opt);
+        } else {
+          goals.forEach((g, i) => {
+            const opt = document.createElement("option");
+            opt.value = g;
+            opt.innerText = `${i + 1}. ${g}`;
+            goalSelect.appendChild(opt);
+          });
+        }
+      }
+
+      async function createScene() {
+        const name = document.getElementById("sceneName").value.trim();
+        const description = document.getElementById("sceneDesc").value.trim();
+        if (!name) return alert("请输入场景名称");
+        await fetch(`${base}/api/config/scenes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description }),
+        });
+        await loadScenes();
+      }
+
+      async function syncPresetScenes() {
+        await fetch(`${base}/api/config/scenes/preset-sync`, { method: "POST" });
+        await loadScenes();
+      }
+
+      async function addField() {
+        if (!currentSceneId) return alert("请先创建并选择场景");
+        const payload = {
+          table_name: document.getElementById("fieldTable").value.trim(),
+          field_name: document.getElementById("fieldName").value.trim(),
+          semantic_name: document.getElementById("fieldSemantic").value.trim(),
+          description: document.getElementById("fieldDesc").value.trim(),
+          role: document.getElementById("fieldRole").value.trim() || "dimension",
+          enabled: true,
+        };
+        await fetch(`${base}/api/config/scenes/${currentSceneId}/fields`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await loadSceneDetail(currentSceneId);
+      }
+
+      async function addRelation() {
+        if (!currentSceneId) return alert("请先创建并选择场景");
+        const payload = {
+          left_table: document.getElementById("leftTable").value.trim(),
+          left_field: document.getElementById("leftField").value.trim(),
+          right_table: document.getElementById("rightTable").value.trim(),
+          right_field: document.getElementById("rightField").value.trim(),
+          join_type: document.getElementById("joinType").value.trim() || "INNER",
+          note: document.getElementById("relationNote").value.trim(),
+        };
+        await fetch(`${base}/api/config/scenes/${currentSceneId}/relations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await loadSceneDetail(currentSceneId);
+      }
+
+      async function loadRelationSuggestions() {
+        const res = await fetch(`${base}/api/config/relation-suggestions`);
+        const data = await res.json();
+        relationSuggestions = data.suggestions || [];
+        const wrap = document.getElementById("suggestionsWrap");
+        wrap.innerHTML = "";
+        relationSuggestions.forEach((s, idx) => {
+          const div = document.createElement("div");
+          div.className = "sugg";
+          div.innerHTML = `
+            <div><strong>#${idx + 1}</strong> ${s.left_table}.${s.left_field} -> ${s.right_table}.${s.right_field} (${s.join_type})</div>
+            <div class="tiny">置信度: ${Math.round((s.confidence || 0) * 100)}% | 原因: ${s.reason || "-"}</div>
+            <div style="margin-top:6px;"><button data-idx="${idx}" class="applyOneBtn">采用这条关系</button></div>
+          `;
+          wrap.appendChild(div);
+        });
+        document.querySelectorAll(".applyOneBtn").forEach((btn) => {
+          btn.onclick = async (e) => {
+            const i = Number(e.target.dataset.idx);
+            await applyOneSuggestion(i);
+          };
+        });
+      }
+
+      async function applyOneSuggestion(index) {
+        if (!currentSceneId) return alert("请先创建并选择场景");
+        const s = relationSuggestions[index];
+        if (!s) return;
+        await fetch(`${base}/api/config/scenes/${currentSceneId}/relations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            left_table: s.left_table,
+            left_field: s.left_field,
+            right_table: s.right_table,
+            right_field: s.right_field,
+            join_type: s.join_type || "INNER",
+            note: `auto: ${s.reason || ""}`,
+          }),
+        });
+        await loadSceneDetail(currentSceneId);
+      }
+
+      async function applyAllSuggestions() {
+        if (!currentSceneId) return alert("请先创建并选择场景");
+        if (!relationSuggestions.length) await loadRelationSuggestions();
+        for (const s of relationSuggestions) {
+          await fetch(`${base}/api/config/scenes/${currentSceneId}/relations`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              left_table: s.left_table,
+              left_field: s.left_field,
+              right_table: s.right_table,
+              right_field: s.right_field,
+              join_type: s.join_type || "INNER",
+              note: `auto: ${s.reason || ""}`,
+            }),
+          });
+        }
+        await loadSceneDetail(currentSceneId);
+      }
+
+      function renderTable(columns, rows) {
+        if (!columns || !rows) return "";
+        let html = "<table><thead><tr>";
+        columns.forEach((c) => (html += `<th>${c}</th>`));
+        html += "</tr></thead><tbody>";
+        rows.slice(0, 15).forEach((r) => {
+          html += "<tr>";
+          r.forEach((v) => (html += `<td>${v}</td>`));
+          html += "</tr>";
+        });
+        html += "</tbody></table>";
+        return html;
+      }
+
+      async function analyze() {
+        if (!sessionId) {
+          alert("请先创建会话");
+          return;
+        }
+        const goal = document.getElementById("goal").value.trim();
+        const res = await fetch(`${base}/api/sessions/${sessionId}/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ goal }),
+        });
+        const data = await res.json();
+        document.getElementById("plan").innerText = JSON.stringify(data.query_plan, null, 2);
+        document.getElementById("sql").innerText = data.sql;
+        document.getElementById("insight").innerText = data.insight;
+        document.getElementById("tableWrap").innerHTML = renderTable(data.columns, data.rows);
+        const ul = document.getElementById("recList");
+        ul.innerHTML = "";
+        data.recommendation.forEach((x) => {
+          const li = document.createElement("li");
+          li.innerText = x;
+          ul.appendChild(li);
+        });
+      }
+
+      function useGoalSample() {
+        const sample = document.getElementById("goalSamples").value;
+        if (!sample) return;
+        document.getElementById("goal").value = sample;
+      }
+
+      async function exportPpt() {
+        if (!sessionId) {
+          alert("请先创建会话");
+          return;
+        }
+        const res = await fetch(`${base}/api/sessions/${sessionId}/export`, { method: "POST" });
+        const data = await res.json();
+        const a = document.getElementById("downloadLink");
+        a.href = `${base}${data.download_url}`;
+        a.innerText = `点击下载: ${data.file_path}`;
+      }
+
+      document.getElementById("createSessionBtn").onclick = createSession;
+      document.getElementById("analyzeBtn").onclick = analyze;
+      document.getElementById("exportBtn").onclick = exportPpt;
+      document.getElementById("createSceneBtn").onclick = createScene;
+      document.getElementById("reloadSceneBtn").onclick = loadScenes;
+      document.getElementById("presetSyncBtn").onclick = syncPresetScenes;
+      document.getElementById("addFieldBtn").onclick = addField;
+      document.getElementById("addRelationBtn").onclick = addRelation;
+      document.getElementById("loadSuggestionsBtn").onclick = loadRelationSuggestions;
+      document.getElementById("applyAllSuggestionsBtn").onclick = applyAllSuggestions;
+      document.getElementById("useGoalSampleBtn").onclick = useGoalSample;
+      document.getElementById("sceneSelect").onchange = (e) => {
+        currentSceneId = e.target.value;
+        loadSceneDetail(currentSceneId);
+      };
+      loadScenes();
+    </script>
+  </body>
+</html>

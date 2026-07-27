@@ -7,3 +7,4 @@ Requires-Dist: fastapi>=0.115.0
 Requires-Dist: uvicorn[standard]>=0.34.0
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: PyMySQL>=1.1.0
+Requires-Dist: python-pptx>=1.0.0

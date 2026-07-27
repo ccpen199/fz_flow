@@ -354,6 +354,13 @@ function pickBestSessionForScene(sceneId) {
   return sorted[0];
 }
 
+function filterSessionsForKnownScenes(sessions) {
+  const items = Array.isArray(sessions) ? sessions : [];
+  const knownSceneIds = new Set(state.scenes.map((scene) => scene.scene_id).filter(Boolean));
+  if (!knownSceneIds.size) return items;
+  return items.filter((session) => !session?.scene_id || knownSceneIds.has(session.scene_id));
+}
+
 async function setCurrentSession(session, { loadThread = true } = {}) {
   state.currentSession = session || null;
   if (session?.scene_id) state.currentSceneId = session.scene_id;
@@ -590,6 +597,11 @@ function setDeliveryActionHint(message) {
   if (hint) hint.textContent = message || "";
 }
 
+function setCreateSceneHint(message) {
+  const hint = el("createSceneHint");
+  if (hint) hint.textContent = message || "";
+}
+
 function clearReportStateViews() {
   state.currentDeck = null;
   state.currentArtifact = null;
@@ -608,6 +620,41 @@ function clearCurrentSessionState() {
   renderSessions();
   renderSessionHeader();
   renderQueryHistory();
+  persistUiState();
+}
+
+function clearCurrentSceneDetailState() {
+  state.currentSceneDetail = null;
+  state.currentScenePlaybook = null;
+  state.selectedPresetKey = "";
+  state.selectedPresetQuestion = "";
+  state.semanticCacheFields = [];
+  state.editingSemanticCacheId = "";
+  state.currentLlmAgentDraft = null;
+}
+
+function setCurrentSceneDetailPlaceholder() {
+  clearCurrentSceneDetailState();
+  if (!state.currentSceneId) return;
+  state.currentSceneDetail = state.scenes.find((scene) => scene.scene_id === state.currentSceneId) || null;
+  state.currentLlmAgentDraft = getSceneDraft(state.currentSceneId);
+}
+
+function ensureCurrentSceneFromList() {
+  const currentId = String(state.currentSceneId || "").trim();
+  if (currentId && state.scenes.some((scene) => scene.scene_id === currentId)) return currentId;
+  state.currentSceneId = state.scenes[0]?.scene_id || "";
+  return state.currentSceneId;
+}
+
+function renderSceneWorkspaceState() {
+  renderScenes();
+  renderSceneConfig();
+  renderIntentTemplates();
+  renderSessions();
+  renderSessionHeader();
+  renderQueryHistory();
+  renderReportState();
   persistUiState();
 }
 
@@ -1125,7 +1172,7 @@ function renderScenes() {
     row.appendChild(mainBtn);
 
     const deleteBtn = document.createElement("button");
-    const isPreset = sceneId.startsWith("scene_prd_");
+    const isPreset = sceneId.startsWith("scene_prd_") || sceneId === "scene_0001";
     deleteBtn.className = "scene-delete-btn";
     deleteBtn.textContent = "删除";
     deleteBtn.disabled = isPreset || !sceneId;
@@ -1232,12 +1279,91 @@ function syncSceneAdvancedFieldState() {
 }
 
 async function deleteScene(scene) {
+  const sceneId = String(scene?.scene_id || "").trim();
+  if (!sceneId) return;
   const ok = window.confirm(`确认删除场景“${formatSceneName(scene.name)}”？`);
   if (!ok) return;
-  await api(`/api/v1/scenes/${scene.scene_id}`, { method: "DELETE" });
-  if (state.currentSceneId === scene.scene_id) state.currentSceneId = "";
-  await refreshScenes();
-  await refreshSessions();
+
+  const snapshot = {
+    scenes: state.scenes,
+    sessions: state.sessions,
+    queryHistory: state.queryHistory,
+    currentSceneId: state.currentSceneId,
+    currentSceneDetail: state.currentSceneDetail,
+    currentScenePlaybook: state.currentScenePlaybook,
+    selectedPresetKey: state.selectedPresetKey,
+    selectedPresetQuestion: state.selectedPresetQuestion,
+    semanticCacheFields: state.semanticCacheFields,
+    editingSemanticCacheId: state.editingSemanticCacheId,
+    currentLlmAgentDraft: state.currentLlmAgentDraft,
+    currentSession: state.currentSession,
+    restoreSessionId: state.restoreSessionId,
+    currentDeck: state.currentDeck,
+    currentArtifact: state.currentArtifact,
+    currentSlide: state.currentSlide,
+    currentReportState: state.currentReportState,
+  };
+  const restoreSnapshot = () => {
+    state.scenes = snapshot.scenes;
+    state.sessions = snapshot.sessions;
+    state.queryHistory = snapshot.queryHistory;
+    state.currentSceneId = snapshot.currentSceneId;
+    state.currentSceneDetail = snapshot.currentSceneDetail;
+    state.currentScenePlaybook = snapshot.currentScenePlaybook;
+    state.selectedPresetKey = snapshot.selectedPresetKey;
+    state.selectedPresetQuestion = snapshot.selectedPresetQuestion;
+    state.semanticCacheFields = snapshot.semanticCacheFields;
+    state.editingSemanticCacheId = snapshot.editingSemanticCacheId;
+    state.currentLlmAgentDraft = snapshot.currentLlmAgentDraft;
+    state.currentSession = snapshot.currentSession;
+    state.restoreSessionId = snapshot.restoreSessionId;
+    state.currentDeck = snapshot.currentDeck;
+    state.currentArtifact = snapshot.currentArtifact;
+    state.currentSlide = snapshot.currentSlide;
+    state.currentReportState = snapshot.currentReportState;
+    renderSceneWorkspaceState();
+  };
+
+  const wasCurrentScene = state.currentSceneId === sceneId;
+  const currentSessionWasDeleted = state.currentSession?.scene_id === sceneId;
+  state.scenes = state.scenes.filter((item) => item.scene_id !== sceneId);
+  state.sessions = state.sessions.filter((item) => item.scene_id !== sceneId);
+  state.queryHistory = state.queryHistory.filter((entry) => getHistorySession(entry)?.scene_id !== sceneId);
+  if (wasCurrentScene) {
+    state.currentSceneId = state.scenes[0]?.scene_id || "";
+    setCurrentSceneDetailPlaceholder();
+  } else if (state.currentSceneDetail?.scene_id === sceneId) {
+    setCurrentSceneDetailPlaceholder();
+  }
+  if (wasCurrentScene || currentSessionWasDeleted) {
+    state.currentSession = null;
+    state.restoreSessionId = "";
+    clearQueryResultViews();
+    clearReportStateViews();
+  }
+  renderSceneWorkspaceState();
+
+  try {
+    await api(`/api/v1/scenes/${encodeURIComponent(sceneId)}`, { method: "DELETE" });
+  } catch (error) {
+    restoreSnapshot();
+    throw error;
+  }
+
+  if (state.llmDraftSaveTimers[sceneId]) {
+    clearTimeout(state.llmDraftSaveTimers[sceneId]);
+    delete state.llmDraftSaveTimers[sceneId];
+  }
+  delete state.llmDraftBySceneId[sceneId];
+  refreshScenes({ loadDetail: false, loadHistory: false })
+    .then(async () => {
+      await refreshSessions();
+      if (wasCurrentScene) {
+        await refreshSceneDetail();
+        await refreshQueryHistory();
+      }
+    })
+    .catch((error) => console.warn("reconcile scenes after delete failed", error));
 }
 
 function renderSceneConfig() {
@@ -1382,6 +1508,35 @@ function getHistoryEntryBySessionId(sessionId) {
   const id = String(sessionId || "").trim();
   if (!id) return null;
   return state.queryHistory.find((entry) => getHistorySession(entry)?.session_id === id) || null;
+}
+
+function getCurrentSessionId() {
+  return String(state.currentSession?.session_id || "").trim();
+}
+
+function isCurrentSessionId(sessionId) {
+  const id = String(sessionId || "").trim();
+  return Boolean(id && getCurrentSessionId() === id);
+}
+
+function applySessionLocally(session) {
+  if (!session?.session_id) return;
+  state.currentSession = session;
+  state.restoreSessionId = session.session_id;
+  if (session.scene_id) state.currentSceneId = session.scene_id;
+  state.sessions = [session, ...state.sessions.filter((item) => item.session_id !== session.session_id)];
+  persistUiState();
+}
+
+function upsertQueryHistoryEntry(entry) {
+  const session = getHistorySession(entry);
+  if (!session?.session_id) return;
+  state.queryHistory = [
+    entry,
+    ...state.queryHistory.filter((item) => getHistorySession(item)?.session_id !== session.session_id),
+  ];
+  renderSessions();
+  renderQueryHistory();
 }
 
 function clearQueryResultViews() {
@@ -1725,7 +1880,10 @@ async function loadReportStateForCurrentSession({ silent = false } = {}) {
     clearReportStateViews();
     return null;
   }
-  const payload = await api(`/api/v1/analysis/sessions/${state.currentSession.session_id}/report-state`);
+  const requestedSessionId = state.currentSession.session_id;
+  const payload = await api(`/api/v1/analysis/sessions/${requestedSessionId}/report-state`);
+  if (!isCurrentSessionId(requestedSessionId)) return null;
+  if (payload?.session?.session_id && payload.session.session_id !== requestedSessionId) return null;
   state.currentReportState = payload || null;
   if (payload?.session) {
     state.currentSession = payload.session;
@@ -1804,7 +1962,8 @@ function maybeAutoRecommendOnce() {
   });
 }
 
-async function refreshScenes() {
+async function refreshScenes({ loadDetail = true, loadHistory = true } = {}) {
+  const previousSceneId = state.currentSceneId;
   try {
     const payload = await api("/api/v1/scenes");
     state.scenes = normalizeSceneList(payload);
@@ -1813,23 +1972,28 @@ async function refreshScenes() {
     state.sceneLoadError = error?.message || String(error);
     console.error(error);
   }
-  if (!state.currentSceneId && state.scenes.length > 0) {
-    state.currentSceneId = state.scenes[0].scene_id;
-  }
-  if (state.currentSceneId && !state.scenes.find((scene) => scene.scene_id === state.currentSceneId)) {
-    state.currentSceneId = "";
-  }
+  ensureCurrentSceneFromList();
   renderScenes();
-  await refreshSceneDetail();
+  const sceneChanged = previousSceneId !== state.currentSceneId;
+  const hasStaleDetail =
+    Boolean(state.currentSceneDetail?.scene_id) && state.currentSceneDetail.scene_id !== state.currentSceneId;
+  if (loadDetail) {
+    await refreshSceneDetail();
+  } else if (sceneChanged || hasStaleDetail || !state.currentSceneId) {
+    setCurrentSceneDetailPlaceholder();
+    renderSceneConfig();
+  }
   renderIntentTemplates();
-  await refreshQueryHistory().catch((error) => console.warn("refresh query history failed", error));
+  if (loadHistory) {
+    await refreshQueryHistory().catch((error) => console.warn("refresh query history failed", error));
+  }
   persistUiState();
-  maybeAutoRecommendOnce();
+  if (loadDetail) maybeAutoRecommendOnce();
 }
 
-async function refreshSessions() {
-  state.sessions = await api("/api/v1/analysis/sessions");
-  const desiredSessionId = String(state.restoreSessionId || state.currentSession?.session_id || "").trim();
+async function refreshSessions({ preferredSessionId = "" } = {}) {
+  state.sessions = filterSessionsForKnownScenes(await api("/api/v1/analysis/sessions"));
+  const desiredSessionId = String(preferredSessionId || state.currentSession?.session_id || state.restoreSessionId || "").trim();
   let nextSession = null;
   if (desiredSessionId) {
     nextSession = state.sessions.find((item) => item.session_id === desiredSessionId) || null;
@@ -1856,9 +2020,11 @@ async function refreshSessions() {
   persistUiState();
 }
 
-async function refreshQueryHistory() {
-  const query = state.currentSceneId ? `?scene_id=${encodeURIComponent(state.currentSceneId)}` : "";
+async function refreshQueryHistory({ sceneId = "" } = {}) {
+  const requestedSceneId = String(sceneId || state.currentSceneId || "").trim();
+  const query = requestedSceneId ? `?scene_id=${encodeURIComponent(requestedSceneId)}` : "";
   const payload = await api(`/api/v1/sql-result-agent/history${query}`);
+  if (requestedSceneId !== String(state.currentSceneId || "").trim()) return payload;
   state.queryHistory = Array.isArray(payload?.items) ? payload.items : [];
   const historySessions = state.queryHistory.map((entry) => getHistorySession(entry)).filter((session) => session?.session_id);
   if (historySessions.length) {
@@ -1889,11 +2055,13 @@ async function selectQueryHistory(sessionId) {
   }
 
   await setCurrentSession(session, { loadThread: false });
+  if (!isCurrentSessionId(id)) return;
   fillIntentInputs(session.global_goal || "");
 
   if (!entry?.query_run && !entry?.query_plan) {
     try {
       const latest = await api(`/api/v1/sql-result-agent/sessions/${id}/latest`);
+      if (!isCurrentSessionId(id)) return;
       entry = {
         session,
         query_plan: latest?.query_plan || null,
@@ -1957,6 +2125,7 @@ async function loadDeckForCurrentSession() {
 
 async function loadLatestSqlResultForCurrentSession({ force = false } = {}) {
   if (!state.currentSession?.session_id) return;
+  const requestedSessionId = state.currentSession.session_id;
   const queryPlanView = el("queryPlanView");
   const queryRunView = el("queryRunView");
   const hasVisibleSqlResult = Boolean(
@@ -1967,11 +2136,12 @@ async function loadLatestSqlResultForCurrentSession({ force = false } = {}) {
   if (hasVisibleSqlResult && !force) return;
   let latest;
   try {
-    latest = await api(`/api/v1/sql-result-agent/sessions/${state.currentSession.session_id}/latest`);
+    latest = await api(`/api/v1/sql-result-agent/sessions/${requestedSessionId}/latest`);
   } catch (error) {
     console.warn("load latest sql result failed", error);
     return;
   }
+  if (!isCurrentSessionId(requestedSessionId)) return;
   if (latest?.query_plan && el("queryPlanView")) {
     el("queryPlanView").textContent = formatQueryPlanView(latest.query_plan);
   }
@@ -1983,6 +2153,7 @@ async function loadLatestSqlResultForCurrentSession({ force = false } = {}) {
 
 async function createScene() {
   const name = el("sceneName").value.trim();
+  setCreateSceneHint("正在创建场景...");
   if (!name) throw new Error("创建场景失败：请填写场景名称");
   const scene = await api("/api/v1/scenes", {
     method: "POST",
@@ -1991,21 +2162,32 @@ async function createScene() {
       description: el("sceneDesc").value.trim(),
     }),
   });
-  await refreshScenes();
+  state.currentSceneId = scene.scene_id;
+  state.selectedPresetKey = "";
+  state.selectedPresetQuestion = "";
+  clearCurrentSessionState();
+  clearQueryResultViews();
+  state.scenes = [scene, ...state.scenes.filter((item) => item.scene_id !== scene.scene_id)];
+  state.currentSceneDetail = scene;
+  state.currentScenePlaybook = null;
+  state.semanticCacheFields = [];
+  state.editingSemanticCacheId = "";
+  state.currentLlmAgentDraft = null;
+  renderScenes();
+  renderSceneConfig();
+  renderIntentTemplates();
+  setCreateSceneHint(`已创建场景：${formatSceneName(scene.name)}。下一步请点击“推荐字段/关系”或手动配置字段。`);
+  persistUiState();
+  await refreshScenes({ loadDetail: false, loadHistory: false });
   state.currentSceneId = scene.scene_id;
   renderScenes();
   await refreshSceneDetail();
+  await refreshQueryHistory({ sceneId: scene.scene_id });
 }
 
 async function refreshSceneDetail() {
   if (!state.currentSceneId) {
-    state.currentSceneDetail = null;
-    state.currentScenePlaybook = null;
-    state.selectedPresetKey = "";
-    state.selectedPresetQuestion = "";
-    state.semanticCacheFields = [];
-    state.editingSemanticCacheId = "";
-    state.currentLlmAgentDraft = null;
+    clearCurrentSceneDetailState();
     renderSceneConfig();
     return;
   }
@@ -2298,8 +2480,8 @@ async function createSession() {
   const goal = el("goalInput").value.trim();
   const session = await createSessionForCurrentScene({ intent: goal });
   if (!session) throw new Error("请先选择场景");
-  await refreshSessions();
-  await refreshQueryHistory();
+  await refreshSessions({ preferredSessionId: session.session_id });
+  await refreshQueryHistory({ sceneId: session.scene_id });
   fillIntentInputs(goal || state.currentSession?.global_goal || "");
   syncArtifactDownload();
 }
@@ -2310,8 +2492,8 @@ async function generateSqlFromIntent() {
   fillIntentInputs(intent);
   const session = await createSessionForCurrentScene({ intent });
   if (!session) throw new Error("请先选择场景");
-  await refreshSessions();
-  await refreshQueryHistory();
+  await refreshSessions({ preferredSessionId: session.session_id });
+  await refreshQueryHistory({ sceneId: session.scene_id });
   await loadPlan();
 }
 
@@ -2337,19 +2519,36 @@ async function syncIntentPlanIfNeeded() {
     method: "POST",
     body: JSON.stringify({ global_goal: intent }),
   });
-  await refreshSessions();
+  state.restoreSessionId = state.currentSession.session_id;
+  await refreshSessions({ preferredSessionId: state.currentSession.session_id });
   await loadPlan();
 }
 
 async function executeQuery() {
   ensureSession();
   await syncIntentPlanIfNeeded();
+  const sessionId = state.currentSession.session_id;
+  const sceneId = state.currentSession.scene_id;
   const queryRun = await api(`/api/v1/analysis/sessions/${state.currentSession.session_id}/current-query/execute`, { method: "POST" });
+  if (!isCurrentSessionId(sessionId)) return;
   el("queryRunView").textContent = formatQueryRunView(queryRun);
   renderQueryTable(queryRun.result_preview || []);
   if (el("querySaveHint")) el("querySaveHint").textContent = `已保存到提问历史：${state.currentSession.session_id}`;
-  await refreshSessions();
-  await refreshQueryHistory();
+  state.restoreSessionId = sessionId;
+  const localSession = {
+    ...state.currentSession,
+    status: queryRun.status === "succeeded" ? "summarizing_result" : "failed",
+    updated_at: new Date().toISOString(),
+  };
+  applySessionLocally(localSession);
+  upsertQueryHistoryEntry({
+    session: localSession,
+    query_plan: null,
+    query_run: queryRun,
+    saved: true,
+  });
+  await refreshSessions({ preferredSessionId: sessionId });
+  await refreshQueryHistory({ sceneId });
 }
 
 async function runSqlResultAgentFromConfig() {
@@ -2391,6 +2590,21 @@ async function runSqlResultAgentFromConfig() {
       },
     }),
   });
+  const resultSceneId = result?.scene_id || session.scene_id;
+  const localSession = {
+    ...session,
+    scene_id: resultSceneId,
+    global_goal: intent,
+    status: result?.query_run ? (result.query_run.status === "succeeded" ? "summarizing_result" : "failed") : session.status,
+    updated_at: new Date().toISOString(),
+  };
+  applySessionLocally(localSession);
+  upsertQueryHistoryEntry({
+    session: localSession,
+    query_plan: result?.query_plan || null,
+    query_run: result?.query_run || null,
+    saved: Boolean(result?.query_run),
+  });
   if (result?.query_plan) {
     el("queryPlanView").textContent = formatQueryPlanView(result.query_plan);
   }
@@ -2403,8 +2617,8 @@ async function runSqlResultAgentFromConfig() {
         : "执行完成，但未返回可保存的 SQL 结果。";
     }
   }
-  await refreshSessions();
-  await refreshQueryHistory();
+  await refreshSessions({ preferredSessionId: session.session_id });
+  await refreshQueryHistory({ sceneId: resultSceneId });
 }
 
 async function withButtonBusy(buttonId, busyText, fn) {
@@ -2733,7 +2947,7 @@ function bind() {
   renderPptSchemeOptions();
   renderSlidePreview(null);
   loadPptSchemes();
-  el("createSceneBtn").onclick = () => run(createScene);
+  el("createSceneBtn").onclick = () => run(() => withButtonBusy("createSceneBtn", "创建中...", createScene));
   el("toggleCreateSceneBtn").onclick = () => {
     state.createSceneCollapsed = !state.createSceneCollapsed;
     renderCreateSceneCollapse();
@@ -2935,7 +3149,7 @@ async function run(fn) {
 }
 
 async function bootstrap() {
-  await refreshScenes();
+  await refreshScenes({ loadHistory: false });
   await refreshSessions();
   await refreshQueryHistory();
   if (state.currentSession?.session_id) {

@@ -225,7 +225,7 @@ def _semantic_name(field_name: str) -> str:
     return field_name.strip() or "unknown_field"
 
 
-def _build_heuristic_candidates(
+def _build_schema_hint_candidates(
     scene: SceneDTO,
     schema: dict[str, list[str]],
     column_types: dict[str, dict[str, str]],
@@ -667,7 +667,7 @@ class LlmAgentService:
         foreign_keys = metadata.get("foreign_keys", [])
         schema_error = metadata.get("schema_error")
         foreign_key_error = metadata.get("foreign_key_error")
-        heuristic = _build_heuristic_candidates(
+        schema_hints = _build_schema_hint_candidates(
             scene=scene,
             schema=schema,
             column_types=column_types,
@@ -681,25 +681,23 @@ class LlmAgentService:
             "goal": goal,
             "schema": schema,
             "schema_column_types": column_types,
-            "fallback_candidates": heuristic,
+            "fallback_candidates": schema_hints,
             "instruction": "请为场景剧本草拟推荐候选 tables / fields / relations，并包含字段类型列表。",
         }
 
         provider_notes: list[str] = []
-        candidates = heuristic
-        provider = "heuristic"
-        mode = "local"
-
         try:
             llm_result = self.client.recommend(payload)
-            remote_candidates = llm_result.get("candidates") if isinstance(llm_result, dict) else None
-            if isinstance(remote_candidates, dict) and remote_candidates:
-                candidates = remote_candidates
-            provider = llm_result.get("provider", provider)
-            mode = llm_result.get("mode", mode)
-            provider_notes.extend(llm_result.get("notes", []) or [])
         except Exception as exc:  # noqa: BLE001
-            provider_notes.append(f"llm provider fallback to heuristic: {exc}")
+            raise RuntimeError(f"configuration recommendation LLM failed: {exc}") from exc
+
+        remote_candidates = llm_result.get("candidates") if isinstance(llm_result, dict) else None
+        if not isinstance(remote_candidates, dict) or not remote_candidates:
+            raise RuntimeError("configuration recommendation LLM returned no candidates")
+        candidates = remote_candidates
+        provider = llm_result.get("provider", "http")
+        mode = llm_result.get("mode", "remote")
+        provider_notes.extend(llm_result.get("notes", []) or [])
 
         if schema_error:
             provider_notes.append(f"schema fetch failed, used scene-local hints: {schema_error}")
@@ -709,24 +707,6 @@ class LlmAgentService:
             provider_notes.append(f"schema cache hit (age={metadata.get('cache_age_seconds')}s)")
 
         normalized = _normalize_candidates(candidates)
-        if not normalized["fields"] and scene.fields:
-            normalized["fields"] = [
-                {
-                    "table_name": f.table_name,
-                    "field_name": f.field_name,
-                    "semantic_name": f.semantic_name,
-                    "description": f.description,
-                    "role": f.role.value,
-                    "field_type": "",
-                    "required": False,
-                    "selected": bool(f.enabled),
-                    "enabled": f.enabled,
-                    "confidence": 0.8,
-                    "reason": "来自当前场景已配置字段",
-                }
-                for f in scene.fields
-            ]
-
         field_type_list = _build_field_type_list(normalized["fields"])
 
         return {

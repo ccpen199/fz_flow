@@ -486,7 +486,10 @@ def _build_mysql_query(scene: SceneDTO, query_plan: QueryPlanDTO) -> tuple[str, 
         if metric_aliases:
             sql += f" ORDER BY {_quote_alias(metric_aliases[0])} {sort_direction}"
         elif dimensions:
-            sql += f" ORDER BY {_quote_alias(dimensions[0])} {sort_direction}"
+            order_aliases = [_quote_alias(dimensions[0])]
+            if len(dimensions) > 1:
+                order_aliases.append(_quote_alias(dimensions[1]))
+            sql += " ORDER BY " + ", ".join(f"{alias} {sort_direction}" for alias in order_aliases)
         sql += f" LIMIT {top_n}"
     return sql, params, dimensions, metric_aliases or metrics
 
@@ -635,14 +638,26 @@ def _execute_mysql_query(scene: SceneDTO, scene_version: str | None, query_plan:
 
     primary_metric = metrics[0] if metrics else next(iter(result_preview[0].keys()))
     if primary_metric in result_preview[0]:
-        top_row = max(result_preview, key=lambda row: float(row.get(primary_metric, 0) or 0))
-        bottom_row = min(result_preview, key=lambda row: float(row.get(primary_metric, 0) or 0))
-        lead_dimension = dimensions[0] if dimensions else "当前分组"
-        insight_summary = [
-            f"{top_row.get(lead_dimension, '当前分组')} 在 {primary_metric} 上当前最高，为 {top_row.get(primary_metric)}",
-            f"{bottom_row.get(lead_dimension, '当前分组')} 在 {primary_metric} 上当前最低，为 {bottom_row.get(primary_metric)}",
-            f"本轮结果来自真实 MySQL：{mysql_config['database']}",
-        ]
+        numeric_rows = []
+        for row in result_preview:
+            try:
+                numeric_rows.append((row, float(row.get(primary_metric, 0) or 0)))
+            except (TypeError, ValueError):
+                continue
+        if numeric_rows:
+            top_row = max(numeric_rows, key=lambda item: item[1])[0]
+            bottom_row = min(numeric_rows, key=lambda item: item[1])[0]
+            lead_dimension = dimensions[0] if dimensions else "当前分组"
+            insight_summary = [
+                f"{top_row.get(lead_dimension, '当前分组')} 在 {primary_metric} 上当前最高，为 {top_row.get(primary_metric)}",
+                f"{bottom_row.get(lead_dimension, '当前分组')} 在 {primary_metric} 上当前最低，为 {bottom_row.get(primary_metric)}",
+                f"本轮结果来自真实 MySQL：{mysql_config['database']}",
+            ]
+        else:
+            insight_summary = [
+                f"本轮查询返回 {len(rows)} 行明细结果。",
+                f"本轮结果来自真实 MySQL：{mysql_config['database']}",
+            ]
     else:
         insight_summary = [f"本轮结果来自真实 MySQL：{mysql_config['database']}"]
 
@@ -651,7 +666,11 @@ def _execute_mysql_query(scene: SceneDTO, scene_version: str | None, query_plan:
         session_id=session_id,
         query_plan_id=query_plan.query_plan_id,
         sql=sql,
-        sql_explanation="根据场景关系和语义字段，执行真实 MySQL 聚合查询。",
+        sql_explanation=(
+            "根据场景关系和语义字段，执行真实 MySQL 聚合查询。"
+            if metrics
+            else "根据场景关系和语义字段，执行真实 MySQL 明细查询。"
+        ),
         status="succeeded",
         rows_count=len(rows),
         duration_ms=duration_ms,

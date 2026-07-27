@@ -159,8 +159,6 @@ async def list_query_history(scene_id: str | None = None) -> dict:
                 "saved": True,
             }
         )
-    if entries:
-        persist_state()
     return {"ok": True, "items": entries}
 
 
@@ -212,7 +210,7 @@ async def generate_and_run_sql_result(session_id: str, body: GenerateSqlResultRe
         "session_id": session_id,
         "scene_id": scene.scene_id,
         "intent": intent,
-        "provider": result.get("provider", "codex_cli"),
+        "provider": result.get("provider", "http"),
         "mode": result.get("mode", "local"),
         "notes": result.get("notes", []),
         "prompt_used": result.get("prompt_used", ""),

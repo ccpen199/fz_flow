@@ -112,7 +112,7 @@ async def generate_candidates(scene_id: str, body: GenerateCandidatesRequest) ->
         "relation_candidates": candidates.get("relations", []),
         "notes": rec.get("notes", []),
         "meta": {
-            "provider": rec.get("provider", "heuristic"),
+            "provider": rec.get("provider", "http"),
             "mode": rec.get("mode", "local"),
             "table_candidates": candidates.get("tables", []),
             "field_type_list": rec.get("field_type_list", []),

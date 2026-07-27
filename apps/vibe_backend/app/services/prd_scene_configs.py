@@ -15,6 +15,7 @@ from .price_scene_config import (
     PRICE_SCENE_RELATIONS,
     PRICE_SCENE_SAMPLE_GOALS,
 )
+from .latest_scene_config import LATEST_SCENE_CONFIG
 
 
 def _field(
@@ -931,6 +932,7 @@ TREND_SCENE_CONFIG = {
 }
 
 PRD_SCENE_CONFIGS = [
+    LATEST_SCENE_CONFIG,
     PRICE_SCENE_CONFIG,
     COMPETITOR_SCENE_CONFIG,
     STRUCTURE_SCENE_CONFIG,

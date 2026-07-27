@@ -66,7 +66,7 @@ class SqlResultAgentService:
                     query_plan_id=query_plan.query_plan_id if query_plan else None,
                     sql=generated_sql,
                     sql_explanation=output_error,
-                    provider=llm_plan.get("provider", "codex_cli"),
+                    provider=llm_plan.get("provider", "http"),
                     mode=llm_plan.get("mode", "local"),
                 )
             else:
@@ -78,13 +78,13 @@ class SqlResultAgentService:
                     query_plan_id=query_plan.query_plan_id if query_plan else None,
                     sql_explanation=generated_sql_explanation,
                     lineage_extra={
-                        "provider": llm_plan.get("provider", "codex_cli"),
+                        "provider": llm_plan.get("provider", "http"),
                         "mode": llm_plan.get("mode", "local"),
                     },
                 )
 
         return {
-            "provider": llm_plan.get("provider", "codex_cli"),
+            "provider": llm_plan.get("provider", "http"),
             "mode": llm_plan.get("mode", "local"),
             "notes": llm_plan.get("notes", []),
             "prompt_used": agent_prompt,

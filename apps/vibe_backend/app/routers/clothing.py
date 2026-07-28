@@ -7,6 +7,8 @@ from typing import Literal
 import pymysql
 from fastapi import APIRouter, HTTPException, Query
 
+from ..services.field_value_resolver_service import field_value_resolver_service
+
 router = APIRouter(prefix="/api/v1/clothing", tags=["clothing"])
 
 
@@ -42,6 +44,22 @@ def _split_list(value: str | None) -> list[str]:
     return [part for part in value.split("||") if part]
 
 
+def _canonical_lookup_value(
+    *,
+    table_name: str,
+    field_name: str,
+    value: str,
+    semantic_name: str,
+) -> str:
+    resolved = field_value_resolver_service.resolve_field_value(
+        table_name=table_name,
+        field_name=field_name,
+        raw_value=value,
+        semantic_name=semantic_name,
+    )
+    return str(resolved.get("canonical_value") or value) if resolved.get("resolved") else value
+
+
 def _build_item_filters(
     *,
     brand: str | None,
@@ -58,15 +76,36 @@ def _build_item_filters(
 
     if brand and ignore != "brand":
         where += " AND ci.BrandName = %s"
-        params.append(brand)
+        params.append(
+            _canonical_lookup_value(
+                table_name="clothing_info",
+                field_name="BrandName",
+                value=brand,
+                semantic_name="品牌",
+            )
+        )
 
     if category and ignore != "category":
         where += " AND ci.Category = %s"
-        params.append(category)
+        params.append(
+            _canonical_lookup_value(
+                table_name="clothing_info",
+                field_name="Category",
+                value=category,
+                semantic_name="一级类目",
+            )
+        )
 
     if sub_category and ignore != "sub_category":
         where += " AND ci.SubCategory = %s"
-        params.append(sub_category)
+        params.append(
+            _canonical_lookup_value(
+                table_name="clothing_info",
+                field_name="SubCategory",
+                value=sub_category,
+                semantic_name="二级类目",
+            )
+        )
 
     if min_price is not None:
         where += " AND ci.Price >= %s"
@@ -78,11 +117,25 @@ def _build_item_filters(
 
     if scene and ignore != "scene":
         where += " AND EXISTS (SELECT 1 FROM clothing_scene_info s WHERE s.ClothingId = ci.Id AND s.Scene = %s)"
-        params.append(scene)
+        params.append(
+            _canonical_lookup_value(
+                table_name="clothing_scene_info",
+                field_name="Scene",
+                value=scene,
+                semantic_name="场景",
+            )
+        )
 
     if fiber and ignore != "fiber":
         where += " AND EXISTS (SELECT 1 FROM clothing_fiber_info f WHERE f.ClothingId = ci.Id AND f.Name = %s)"
-        params.append(fiber)
+        params.append(
+            _canonical_lookup_value(
+                table_name="clothing_fiber_info",
+                field_name="Name",
+                value=fiber,
+                semantic_name="材质",
+            )
+        )
 
     return where, params
 

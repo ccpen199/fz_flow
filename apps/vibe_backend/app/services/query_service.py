@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pymysql
 from packages.shared_contracts.python_models import QueryPlanDTO, QueryRunDTO, SceneDTO
+from .field_value_resolver_service import field_value_resolver_service
 from .semantic_field_cache_service import semantic_field_cache_service
 
 ALLOWED_JOIN_TYPES = {"INNER", "LEFT", "RIGHT", "LEFT OUTER", "RIGHT OUTER"}
@@ -328,6 +329,29 @@ def _build_filters(
             return all(item in {"待确认", "待补充", "unknown", "tbd"} for item in normalized)
         return False
 
+    def canonicalize_filter_value(field, raw, *, preserve_like_wildcards: bool = False):
+        if not isinstance(raw, str):
+            return raw
+        prefix = ""
+        suffix = ""
+        lookup_value = raw
+        if preserve_like_wildcards:
+            text = raw.strip()
+            prefix = "%" if text.startswith("%") else ""
+            suffix = "%" if text.endswith("%") and len(text) > len(prefix) else ""
+            lookup_value = text[len(prefix) :]
+            if suffix:
+                lookup_value = lookup_value[:-1]
+        canonical = field_value_resolver_service.canonicalize_value_for_field(
+            table_name=field.table_name,
+            field_name=field.field_name,
+            semantic_name=field.semantic_name,
+            raw_value=lookup_value,
+        )
+        if preserve_like_wildcards and isinstance(canonical, str):
+            return f"{prefix}{canonical}{suffix}"
+        return canonical
+
     for condition in query_plan.filters or []:
         semantic_name = condition.get("field")
         if not semantic_name:
@@ -342,10 +366,12 @@ def _build_filters(
         table_alias = aliases.get(field.table_name) or alias_for(field.table_name)
         field_sql = f"{table_alias}.{_quote_identifier(field.field_name)}"
         if operator == "in" and isinstance(value, list) and value:
+            value = [canonicalize_filter_value(field, item) for item in value]
             placeholders = ", ".join(["%s"] * len(value))
             where_parts.append(f"{field_sql} IN ({placeholders})")
             params.extend(value)
         elif operator == "=":
+            value = canonicalize_filter_value(field, value)
             where_parts.append(f"{field_sql} = %s")
             params.append(value)
         elif operator in {">", ">=", "<", "<="}:
@@ -355,6 +381,7 @@ def _build_filters(
             where_parts.append(f"{field_sql} BETWEEN %s AND %s")
             params.extend([value[0], value[1]])
         elif operator == "like":
+            value = canonicalize_filter_value(field, value, preserve_like_wildcards=True)
             where_parts.append(f"{field_sql} LIKE %s")
             params.append(value)
     return where_parts, params
@@ -748,6 +775,10 @@ def execute_raw_sql(
 ) -> QueryRunDTO:
     sql_text = str(sql or "").strip()
     sql_text, mysql_quotes_normalized = _normalize_mysql_identifier_quotes(sql_text)
+    sql_text, value_resolution_changes = field_value_resolver_service.rewrite_sql_field_literals(
+        sql=sql_text,
+        scene=scene,
+    )
     if not sql_text:
         return QueryRunDTO(
             query_id=f"query_{uuid4().hex[:10]}",
@@ -908,6 +939,12 @@ def execute_raw_sql(
     }
     if isinstance(lineage_extra, dict):
         lineage.update(lineage_extra)
+    if value_resolution_changes:
+        previous_changes = lineage.get("value_resolution")
+        if isinstance(previous_changes, list):
+            lineage["value_resolution"] = [*previous_changes, *value_resolution_changes]
+        else:
+            lineage["value_resolution"] = value_resolution_changes
     return QueryRunDTO(
         query_id=f"query_{uuid4().hex[:10]}",
         session_id=session_id,
@@ -924,6 +961,7 @@ def execute_raw_sql(
             {"type": "read_only_sql", "passed": True},
             {"type": "single_statement", "passed": True},
             {"type": "mysql_identifier_quotes", "passed": True, "normalized": mysql_quotes_normalized},
+            {"type": "field_value_resolution", "passed": True, "changes": value_resolution_changes},
         ],
         lineage=lineage,
     )

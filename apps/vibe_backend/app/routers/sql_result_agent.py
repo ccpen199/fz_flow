@@ -23,9 +23,30 @@ class GenerateSqlResultRequest(BaseModel):
     context: dict | None = None
 
 
+class AnalyzeSqlIntentRequest(BaseModel):
+    intent: str = Field(default="", description="user question before SQL generation")
+    context: dict | None = None
+
+
 @router.get("/health")
 async def sql_result_agent_health() -> dict:
     return service.health()
+
+
+@router.post("/scenes/{scene_id}/analyze-intent")
+async def analyze_sql_intent(scene_id: str, body: AnalyzeSqlIntentRequest) -> dict:
+    scene = scene_cache_service.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="scene not found")
+    intent = body.intent.strip()
+    if not intent:
+        raise HTTPException(status_code=400, detail="intent is required")
+    analysis = service.analyze_intent(
+        scene=scene,
+        intent=intent,
+        context=body.context if isinstance(body.context, dict) else None,
+    )
+    return {"ok": True, **analysis}
 
 
 def _latest_query_run_for_session(session_id: str) -> QueryRunDTO | None:
@@ -81,6 +102,19 @@ def _sync_session_from_query_result(
     if query_plan is not None and query_plan.intent and session.global_goal != query_plan.intent:
         session.global_goal = query_plan.intent
     return session
+
+
+def _sql_agent_failure_detail(exc: Exception) -> str:
+    health = service.health()
+    provider = str(health.get("provider") or "unknown").strip()
+    model = str(health.get("model") or "unknown").strip()
+    endpoint = str(health.get("endpoint") or "未配置").strip()
+    message = str(exc).strip() or exc.__class__.__name__
+    return (
+        f"SQL 结果 Agent 模型调用失败：{message}。"
+        f"当前 provider={provider}，model={model}，endpoint={endpoint}。"
+        "请检查 SQL_RESULT_AGENT_HTTP_ENDPOINT、SQL_RESULT_AGENT_API_KEY，以及对应模型代理服务是否可达。"
+    )
 
 
 def _recover_session_from_query_result(
@@ -177,15 +211,21 @@ async def generate_and_run_sql_result(session_id: str, body: GenerateSqlResultRe
 
     session.global_goal = intent
     session.updated_at = datetime.now(UTC)
-    result = service.run(
-        scene=scene,
-        session_id=session_id,
-        scene_version=session.scene_version,
-        intent=intent,
-        agent_prompt=body.agent_prompt.strip(),
-        context=body.context if isinstance(body.context, dict) else None,
-        execute=body.execute,
-    )
+    try:
+        result = service.run(
+            scene=scene,
+            session_id=session_id,
+            scene_version=session.scene_version,
+            intent=intent,
+            agent_prompt=body.agent_prompt.strip(),
+            context=body.context if isinstance(body.context, dict) else None,
+            execute=body.execute,
+        )
+    except RuntimeError as exc:
+        session.status = SessionStatus.FAILED
+        session.updated_at = datetime.now(UTC)
+        persist_state()
+        raise HTTPException(status_code=502, detail=_sql_agent_failure_detail(exc)) from exc
 
     query_plan = result.get("query_plan")
     query_run = result.get("query_run")
@@ -216,6 +256,7 @@ async def generate_and_run_sql_result(session_id: str, body: GenerateSqlResultRe
         "prompt_used": result.get("prompt_used", ""),
         "sql": result.get("sql", ""),
         "sql_explanation": result.get("sql_explanation", ""),
+        "value_resolution": result.get("value_resolution", []),
         "query_plan": query_plan.model_dump(mode="json") if query_plan is not None else None,
         "query_run": query_run.model_dump(mode="json") if query_run is not None else None,
         "saved": query_run is not None,

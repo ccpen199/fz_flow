@@ -809,6 +809,75 @@ select {
   min-height: 18px;
 }
 
+.field-resolution-panel {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(64, 212, 200, 0.52);
+  border-radius: 10px;
+  background: rgba(7, 37, 49, 0.58);
+}
+
+.field-resolution-head {
+  margin-bottom: 6px;
+}
+
+.field-resolution-head h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #dff8f5;
+}
+
+.field-resolution-summary {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.field-resolution-list {
+  display: grid;
+  gap: 8px;
+}
+
+.field-resolution-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 220px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid rgba(95, 145, 191, 0.34);
+  border-radius: 8px;
+  background: rgba(8, 22, 37, 0.58);
+}
+
+.field-resolution-term {
+  min-width: 0;
+}
+
+.field-resolution-term strong,
+.field-resolution-term span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.field-resolution-term strong {
+  font-size: 13px;
+  color: #eef4ff;
+}
+
+.field-resolution-term span {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.field-resolution-select {
+  width: 100%;
+  margin: 0;
+}
+
+.field-resolution-actions {
+  margin-top: 10px;
+}
+
 .history-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

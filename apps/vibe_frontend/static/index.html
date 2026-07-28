@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FZ 智能分析工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20260709-scene-delete" />
+    <link rel="stylesheet" href="./styles.css?v=20260728-field-resolution-err" />
   </head>
   <body>
     <div class="app-bg"></div>
@@ -35,12 +35,6 @@
           </div>
         </section>
 
-        <section class="panel">
-          <h2>创建会话</h2>
-          <p id="createSessionSceneHint" class="muted">当前场景：未选择</p>
-          <textarea id="goalInput" placeholder="分析目标">分析各品牌在不同平台的销售价差异并生成汇报</textarea>
-          <button id="createSessionBtn">创建会话</button>
-        </section>
       </aside>
 
       <main class="content">
@@ -345,6 +339,17 @@
               <div class="actions compact-actions">
                 <button id="runQueryBtn">生成并执行</button>
               </div>
+              <div id="fieldResolutionPanel" class="field-resolution-panel" hidden>
+                <div class="section-head field-resolution-head">
+                  <h4>字段筛选 / 歧义消解</h4>
+                  <button id="clearFieldResolutionBtn" class="secondary compact-btn" type="button">清空</button>
+                </div>
+                <p id="fieldResolutionSummary" class="muted field-resolution-summary"></p>
+                <div id="fieldResolutionList" class="field-resolution-list"></div>
+                <div class="actions compact-actions field-resolution-actions">
+                  <button id="confirmFieldResolutionBtn" type="button">确认并生成SQL</button>
+                </div>
+              </div>
               <p id="querySaveHint" class="muted query-save-hint"></p>
               <p class="muted">
                 检查三项：FROM/JOIN 是否符合所选关系；SELECT 是否只含已选字段；WHERE 时间与过滤条件是否正确。
@@ -495,6 +500,6 @@
 品牌 -> dimension</pre>
       </div>
     </dialog>
-    <script src="./main.js?v=20260709-scene-delete"></script>
+    <script src="./main.js?v=20260728-field-resolution-err"></script>
   </body>
 </html>

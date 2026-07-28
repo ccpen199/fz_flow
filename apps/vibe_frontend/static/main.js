@@ -37,6 +37,11 @@ const state = {
   sceneLoadError: "",
   autoRecommendedSceneIds: {},
   intentTemplatesCollapsed: true,
+  fieldResolution: {
+    analysis: null,
+    intent: "",
+    selections: {},
+  },
   currentSession: null,
   currentDeck: null,
   currentArtifact: null,
@@ -309,6 +314,193 @@ function fillIntentInputs(intent) {
   if (el("goalInput")) el("goalInput").value = text;
 }
 
+function resetFieldResolutionState() {
+  state.fieldResolution = {
+    analysis: null,
+    intent: "",
+    selections: {},
+  };
+  renderFieldResolutionPanel();
+}
+
+function normalizeFieldResolutionCandidateIndex(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return raw;
+}
+
+function buildDefaultFieldResolutionSelections(analysis) {
+  const selections = {};
+  const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+  for (const term of terms) {
+    const termId = String(term?.term_id || "").trim();
+    if (!termId) continue;
+    if (term?.status === "resolved") {
+      selections[termId] = "0";
+    } else {
+      selections[termId] = "";
+    }
+  }
+  return selections;
+}
+
+function setFieldResolutionAnalysis(analysis, intent) {
+  state.fieldResolution = {
+    analysis: analysis || null,
+    intent: String(intent || "").trim(),
+    selections: buildDefaultFieldResolutionSelections(analysis),
+  };
+  renderFieldResolutionPanel();
+}
+
+function syncFieldResolutionSelectionsFromDom() {
+  const analysis = state.fieldResolution.analysis;
+  const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+  const nextSelections = { ...state.fieldResolution.selections };
+  for (const term of terms) {
+    const termId = String(term?.term_id || "").trim();
+    if (!termId) continue;
+    const select = el(`fieldResolutionSelect_${termId}`);
+    if (!select) continue;
+    nextSelections[termId] = normalizeFieldResolutionCandidateIndex(select.value);
+  }
+  state.fieldResolution.selections = nextSelections;
+  persistUiState();
+}
+
+function buildFieldResolutionPayload() {
+  const analysis = state.fieldResolution.analysis;
+  const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+  if (!terms.length) {
+    return {
+      field_resolution: {
+        intent: state.fieldResolution.intent || "",
+        confirmed_resolutions: [],
+        ignored_terms: [],
+      },
+      has_unresolved_required_terms: false,
+    };
+  }
+
+  const confirmed_resolutions = [];
+  const ignored_terms = [];
+  let has_unresolved_required_terms = false;
+  for (const term of terms) {
+    const termId = String(term?.term_id || "").trim();
+    const termText = String(term?.text || "").trim();
+    const status = String(term?.status || "").trim();
+    const selection = normalizeFieldResolutionCandidateIndex(state.fieldResolution.selections[termId]);
+    if (!selection) {
+      if (status === "ambiguous") {
+        has_unresolved_required_terms = true;
+      }
+      continue;
+    }
+    if (selection === "__ignore__") {
+      ignored_terms.push(termText);
+      continue;
+    }
+    const matchIndex = Number.parseInt(selection, 10);
+    const matches = Array.isArray(term?.matches) ? term.matches : [];
+    const match = Number.isInteger(matchIndex) ? matches[matchIndex] : null;
+    if (!match) {
+      if (status === "ambiguous") {
+        has_unresolved_required_terms = true;
+      }
+      continue;
+    }
+    confirmed_resolutions.push({
+      term: termText,
+      term_id: termId,
+      semantic_name: match.semantic_name || "",
+      table_name: match.table_name || "",
+      field_name: match.field_name || "",
+      canonical_value: match.canonical_value || "",
+      score: match.score ?? 0,
+      strategy: match.strategy || "",
+      raw_value: termText,
+    });
+  }
+  return {
+    field_resolution: {
+      intent: state.fieldResolution.intent || "",
+      confirmed_resolutions,
+      ignored_terms,
+    },
+    has_unresolved_required_terms,
+  };
+}
+
+function renderFieldResolutionPanel() {
+  const panel = el("fieldResolutionPanel");
+  const summary = el("fieldResolutionSummary");
+  const list = el("fieldResolutionList");
+  if (!panel || !summary || !list) return;
+  const analysis = state.fieldResolution.analysis;
+  const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+  if (!analysis || !terms.length) {
+    panel.hidden = true;
+    summary.textContent = "";
+    list.innerHTML = "";
+    return;
+  }
+
+  panel.hidden = false;
+  const ambiguousCount = Array.isArray(analysis.ambiguous_terms) ? analysis.ambiguous_terms.length : 0;
+  const resolvedCount = Array.isArray(analysis.resolved_terms) ? analysis.resolved_terms.length : 0;
+  summary.textContent = ambiguousCount
+    ? `已识别 ${analysis.matched_term_count || 0} 个候选词，其中 ${ambiguousCount} 个需要确认，${resolvedCount} 个已自动识别。`
+    : `已识别 ${analysis.matched_term_count || 0} 个候选词，未发现歧义，可直接继续。`;
+
+  list.innerHTML = terms
+    .map((term) => {
+      const termId = String(term?.term_id || "").trim();
+      const matches = Array.isArray(term?.matches) ? term.matches : [];
+      const currentValue = normalizeFieldResolutionCandidateIndex(state.fieldResolution.selections[termId] ?? (term?.status === "resolved" ? "0" : ""));
+      const options = [];
+      options.push(`<option value="">请选择字段</option>`);
+      options.push(`<option value="__ignore__"${currentValue === "__ignore__" ? " selected" : ""}>不作为过滤条件</option>`);
+      matches.forEach((match, idx) => {
+        const value = String(idx);
+        const selected = currentValue === value ? " selected" : "";
+        const label = `${escapeHtml(match.semantic_name || "-")} · ${escapeHtml(match.table_name || "-")}.${escapeHtml(match.field_name || "-")} = ${escapeHtml(match.canonical_value || "-")} (${Number(match.score || 0).toFixed(2)})`;
+        options.push(`<option value="${value}"${selected}>${label}</option>`);
+      });
+      const statusText = term?.status === "ambiguous" ? "多个字段命中，请确认" : "已自动识别";
+      return `
+        <div class="field-resolution-row" data-term-id="${escapeHtml(termId)}">
+          <div class="field-resolution-term">
+            <strong>${escapeHtml(term?.text || "-")}</strong>
+            <span>${escapeHtml(statusText)} · ${escapeHtml(term?.source || "-")}</span>
+          </div>
+          <select id="fieldResolutionSelect_${escapeHtml(termId)}" class="field-resolution-select">
+            ${options.join("")}
+          </select>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function analyzeFieldResolutionForIntent(intent) {
+  const sceneId = state.currentSceneId;
+  if (!sceneId) return null;
+  if (!String(intent || "").trim()) return null;
+  const analysis = await api(`/api/v1/sql-result-agent/scenes/${sceneId}/analyze-intent`, {
+    method: "POST",
+    body: JSON.stringify({
+      intent,
+      context: {
+        source: "query_tab",
+        scene_id: sceneId,
+      },
+    }),
+  });
+  setFieldResolutionAnalysis(analysis, intent);
+  syncFieldResolutionSelectionsFromDom();
+  return analysis;
+}
+
 function getSceneDraft(sceneId) {
   const key = String(sceneId || "").trim();
   if (!key) return null;
@@ -365,6 +557,7 @@ async function setCurrentSession(session, { loadThread = true } = {}) {
   state.currentSession = session || null;
   if (session?.scene_id) state.currentSceneId = session.scene_id;
   state.restoreSessionId = session?.session_id || "";
+  resetFieldResolutionState();
   clearReportStateViews();
   renderSessions();
   renderScenes();
@@ -541,6 +734,21 @@ async function withAgentWait(agentKey, label, fn) {
   }
 }
 
+function formatErrorDetail(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (typeof detail === "object") {
+    if (typeof detail.detail === "string") return detail.detail;
+    if (typeof detail.message === "string") return detail.message;
+    try {
+      return JSON.stringify(detail);
+    } catch (_error) {
+      return String(detail);
+    }
+  }
+  return String(detail);
+}
+
 async function api(path, options = {}) {
   syncBackendBase();
   const requestOptions = {
@@ -561,7 +769,7 @@ async function api(path, options = {}) {
     let detail = text;
     try {
       const payload = JSON.parse(text);
-      detail = payload?.detail || text;
+      detail = formatErrorDetail(payload?.detail || text);
     } catch (_error) {
       detail = text;
     }
@@ -616,6 +824,7 @@ function clearReportStateViews() {
 function clearCurrentSessionState() {
   state.currentSession = null;
   state.restoreSessionId = "";
+  resetFieldResolutionState();
   clearReportStateViews();
   renderSessions();
   renderSessionHeader();
@@ -635,6 +844,7 @@ function clearCurrentSceneDetailState() {
 
 function setCurrentSceneDetailPlaceholder() {
   clearCurrentSceneDetailState();
+  resetFieldResolutionState();
   if (!state.currentSceneId) return;
   state.currentSceneDetail = state.scenes.find((scene) => scene.scene_id === state.currentSceneId) || null;
   state.currentLlmAgentDraft = getSceneDraft(state.currentSceneId);
@@ -1973,6 +2183,9 @@ async function refreshScenes({ loadDetail = true, loadHistory = true } = {}) {
     console.error(error);
   }
   ensureCurrentSceneFromList();
+  if (previousSceneId !== state.currentSceneId) {
+    resetFieldResolutionState();
+  }
   renderScenes();
   const sceneChanged = previousSceneId !== state.currentSceneId;
   const hasStaleDetail =
@@ -1992,6 +2205,7 @@ async function refreshScenes({ loadDetail = true, loadHistory = true } = {}) {
 }
 
 async function refreshSessions({ preferredSessionId = "" } = {}) {
+  const previousSceneId = state.currentSceneId;
   state.sessions = filterSessionsForKnownScenes(await api("/api/v1/analysis/sessions"));
   const desiredSessionId = String(preferredSessionId || state.currentSession?.session_id || state.restoreSessionId || "").trim();
   let nextSession = null;
@@ -2005,6 +2219,9 @@ async function refreshSessions({ preferredSessionId = "" } = {}) {
   state.restoreSessionId = nextSession?.session_id || desiredSessionId || "";
   if (nextSession?.scene_id) {
     state.currentSceneId = nextSession.scene_id;
+    if (previousSceneId !== state.currentSceneId) {
+      resetFieldResolutionState();
+    }
   } else {
     clearReportStateViews();
   }
@@ -2551,7 +2768,7 @@ async function executeQuery() {
   await refreshQueryHistory({ sceneId });
 }
 
-async function runSqlResultAgentFromConfig() {
+async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {}) {
   if (!state.currentSceneId) throw new Error("未选择场景");
   const intent =
     (el("queryIntentInput")?.value || "").trim() ||
@@ -2559,6 +2776,35 @@ async function runSqlResultAgentFromConfig() {
     (el("llmGoal")?.value || "").trim();
   if (!intent) throw new Error("请先输入业务问题或分析目标");
   fillIntentInputs(intent);
+  let fieldResolutionPayload = { field_resolution: { intent, confirmed_resolutions: [], ignored_terms: [] }, has_unresolved_required_terms: false };
+  if (!skipFieldResolution) {
+    const existingAnalysis =
+      state.fieldResolution.analysis && normalizeIntent(state.fieldResolution.intent) === normalizeIntent(intent);
+    if (existingAnalysis) {
+      syncFieldResolutionSelectionsFromDom();
+    } else {
+      const analysis = await analyzeFieldResolutionForIntent(intent);
+      if (!analysis) throw new Error("字段解析失败");
+    }
+    fieldResolutionPayload = buildFieldResolutionPayload();
+    renderFieldResolutionPanel();
+    if (fieldResolutionPayload.has_unresolved_required_terms) {
+      if (el("querySaveHint")) {
+        el("querySaveHint").textContent = "已识别到需要确认的字段，请先在下方完成字段筛选，再继续生成SQL。";
+      }
+      return;
+    }
+  } else {
+    syncFieldResolutionSelectionsFromDom();
+    fieldResolutionPayload = buildFieldResolutionPayload();
+    if (fieldResolutionPayload.has_unresolved_required_terms) {
+      if (el("querySaveHint")) {
+        el("querySaveHint").textContent = "还有字段歧义未确认，请先选择字段或选择不作为过滤条件。";
+      }
+      renderFieldResolutionPanel();
+      return;
+    }
+  }
   const session = await createSessionForCurrentScene({ intent });
   if (!session) throw new Error("请先选择场景");
   const recommendation = state.currentLlmAgentDraft?.candidates || {};
@@ -2571,25 +2817,33 @@ async function runSqlResultAgentFromConfig() {
   switchToTab("query");
   clearQueryResultViews();
   if (el("querySaveHint")) el("querySaveHint").textContent = "执行中，完成后会自动保存到提问历史。";
-  const result = await api(`/api/v1/sql-result-agent/sessions/${session.session_id}/generate-and-run`, {
-    method: "POST",
-    body: JSON.stringify({
-      intent,
-      agent_prompt: (el("llmGoal")?.value || "").trim(),
-      execute: true,
-      context: {
-        source: "query_tab",
-        scene_id: state.currentSceneId,
-        selected_preset_key: state.selectedPresetKey || undefined,
-        selected_preset_question: state.selectedPresetQuestion || undefined,
-        intent_edited_from_preset: Boolean(
-          state.selectedPresetKey && normalizeIntent(intent) !== normalizeIntent(state.selectedPresetQuestion),
-        ),
-        selected_field_count: selectedFieldCount,
-        selected_relation_count: selectedRelationCount,
-      },
-    }),
-  });
+  let result;
+  try {
+    result = await api(`/api/v1/sql-result-agent/sessions/${session.session_id}/generate-and-run`, {
+      method: "POST",
+      body: JSON.stringify({
+        intent,
+        agent_prompt: (el("llmGoal")?.value || "").trim(),
+        execute: true,
+        context: {
+          source: "query_tab",
+          scene_id: state.currentSceneId,
+          selected_preset_key: state.selectedPresetKey || undefined,
+          selected_preset_question: state.selectedPresetQuestion || undefined,
+          intent_edited_from_preset: Boolean(
+            state.selectedPresetKey && normalizeIntent(intent) !== normalizeIntent(state.selectedPresetQuestion),
+          ),
+          selected_field_count: selectedFieldCount,
+          selected_relation_count: selectedRelationCount,
+          field_resolution: fieldResolutionPayload.field_resolution,
+        },
+      }),
+    });
+  } catch (error) {
+    const detail = formatErrorDetail(error?.detail || error?.message || error);
+    if (el("querySaveHint")) el("querySaveHint").textContent = `SQL生成失败：${detail}`;
+    throw error;
+  }
   const resultSceneId = result?.scene_id || session.scene_id;
   const localSession = {
     ...session,
@@ -2952,9 +3206,23 @@ function bind() {
     state.createSceneCollapsed = !state.createSceneCollapsed;
     renderCreateSceneCollapse();
   };
-  el("createSessionBtn").onclick = () => run(createSession);
+  if (el("createSessionBtn")) el("createSessionBtn").onclick = () => run(createSession);
   el("runQueryBtn").onclick = () =>
     run(() => withAgentWait("sqlResult", "SQL 结果 Agent", runSqlResultAgentFromConfig));
+  if (el("confirmFieldResolutionBtn")) {
+    el("confirmFieldResolutionBtn").onclick = () =>
+      run(() => withAgentWait("sqlResult", "SQL 结果 Agent", () => runSqlResultAgentFromConfig({ skipFieldResolution: true })));
+  }
+  if (el("clearFieldResolutionBtn")) {
+    el("clearFieldResolutionBtn").onclick = () => resetFieldResolutionState();
+  }
+  if (el("fieldResolutionList")) {
+    el("fieldResolutionList").addEventListener("change", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement)) return;
+      syncFieldResolutionSelectionsFromDom();
+    });
+  }
   el("toggleIntentTemplatesBtn").onclick = () => {
     state.intentTemplatesCollapsed = !state.intentTemplatesCollapsed;
     renderIntentTemplates();
@@ -2968,6 +3236,7 @@ function bind() {
     state.selectedPresetKey = btn.dataset.presetKey || "";
     state.selectedPresetQuestion = intent;
     fillIntentInputs(intent);
+    resetFieldResolutionState();
     persistUiState();
     if (el("queryIntentInput")) {
       el("queryIntentInput").focus();
@@ -2998,7 +3267,12 @@ function bind() {
   }
   if (el("backendBase")) el("backendBase").addEventListener("change", () => persistUiState());
   if (el("goalInput")) el("goalInput").addEventListener("input", () => persistUiState());
-  if (el("queryIntentInput")) el("queryIntentInput").addEventListener("input", () => persistUiState());
+  if (el("queryIntentInput")) {
+    el("queryIntentInput").addEventListener("input", () => {
+      resetFieldResolutionState();
+      persistUiState();
+    });
+  }
   if (el("guideBtn")) el("guideBtn").onclick = () => el("guideDialog").showModal();
   if (el("closeGuideBtn")) el("closeGuideBtn").onclick = () => el("guideDialog").close();
   if (el("fieldRoleHelpBtn")) el("fieldRoleHelpBtn").onclick = () => el("fieldRoleHelpDialog").showModal();

@@ -7,6 +7,7 @@ from uuid import uuid4
 from integrations.llm_agent import SqlResultAgentClient
 from packages.shared_contracts.python_models import QueryPlanDTO, QueryRunDTO, SceneDTO
 
+from .field_value_resolver_service import field_value_resolver_service
 from .query_service import execute_raw_sql
 from .scene_playbooks import get_scene_playbook
 from .semantic_field_cache_service import semantic_field_cache_service
@@ -21,6 +22,28 @@ class SqlResultAgentService:
     def health(self) -> dict:
         return self.client.health()
 
+    def analyze_intent(
+        self,
+        *,
+        scene: SceneDTO,
+        intent: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        available = self._queryable_semantic_fields(scene)
+        analysis = field_value_resolver_service.analyze_intent_values(
+            scene=scene,
+            queryable_fields=available,
+            intent=intent,
+        )
+        return {
+            "scene_id": scene.scene_id,
+            "scene_name": scene.name,
+            "scene_version": scene.version,
+            "intent": str(intent or "").strip(),
+            "context": context or {},
+            **analysis,
+        }
+
     def run(
         self,
         *,
@@ -34,6 +57,12 @@ class SqlResultAgentService:
     ) -> dict:
         available = self._queryable_semantic_fields(scene)
         playbook_context = self._build_playbook_context(scene=scene, intent=intent, context=context)
+        field_disambiguation_context = self._field_disambiguation_context(context)
+        value_resolution_context = field_value_resolver_service.build_scene_value_context(
+            scene=scene,
+            queryable_fields=available,
+            intent=intent,
+        )
         llm_payload = {
             "scene_id": scene.scene_id,
             "scene_name": scene.name,
@@ -46,6 +75,8 @@ class SqlResultAgentService:
             "scene_playbook": playbook_context.get("scene_playbook"),
             "selected_preset": playbook_context.get("selected_preset"),
             "generation_rules": playbook_context.get("generation_rules"),
+            "value_resolution_context": value_resolution_context,
+            "field_disambiguation_context": field_disambiguation_context,
         }
         llm_plan = self.client.generate_plan(llm_payload)
         query_plan = self._build_query_plan(
@@ -53,9 +84,30 @@ class SqlResultAgentService:
             llm_plan=(llm_plan.get("plan") or {}) if isinstance(llm_plan, dict) else {},
             intent=intent,
         )
+        value_resolution_changes: list[dict[str, Any]] = []
+        if query_plan is not None:
+            normalized_filters, filter_changes = field_value_resolver_service.normalize_filter_conditions(
+                filters=query_plan.filters,
+                scene=scene,
+                queryable_fields=available,
+            )
+            if filter_changes:
+                query_plan.filters = normalized_filters
+                query_plan.risk_notes = [
+                    *query_plan.risk_notes,
+                    *self._value_resolution_notes(filter_changes),
+                ]
+                value_resolution_changes.extend(filter_changes)
         query_run: QueryRunDTO | None = None
         generated_sql = str((llm_plan or {}).get("sql") or "").strip()
         generated_sql_explanation = str((llm_plan or {}).get("sql_explanation") or "").strip()
+        if generated_sql:
+            generated_sql, sql_value_changes = field_value_resolver_service.rewrite_sql_field_literals(
+                sql=generated_sql,
+                scene=scene,
+                queryable_fields=available,
+            )
+            value_resolution_changes.extend(sql_value_changes)
         if execute:
             output_error = self._validate_llm_sql_output(intent=intent, sql=generated_sql, plan=query_plan)
             if output_error:
@@ -66,7 +118,7 @@ class SqlResultAgentService:
                     query_plan_id=query_plan.query_plan_id if query_plan else None,
                     sql=generated_sql,
                     sql_explanation=output_error,
-                    provider=llm_plan.get("provider", "http"),
+                    provider=llm_plan.get("provider", "codex_cli"),
                     mode=llm_plan.get("mode", "local"),
                 )
             else:
@@ -78,21 +130,26 @@ class SqlResultAgentService:
                     query_plan_id=query_plan.query_plan_id if query_plan else None,
                     sql_explanation=generated_sql_explanation,
                     lineage_extra={
-                        "provider": llm_plan.get("provider", "http"),
+                        "provider": llm_plan.get("provider", "codex_cli"),
                         "mode": llm_plan.get("mode", "local"),
+                        "value_resolution": value_resolution_changes,
                     },
                 )
 
         return {
-            "provider": llm_plan.get("provider", "http"),
+            "provider": llm_plan.get("provider", "codex_cli"),
             "mode": llm_plan.get("mode", "local"),
-            "notes": llm_plan.get("notes", []),
+            "notes": [
+                *(llm_plan.get("notes", []) if isinstance(llm_plan.get("notes"), list) else []),
+                *self._value_resolution_notes(value_resolution_changes),
+            ],
             "prompt_used": agent_prompt,
             "sql": generated_sql,
             "sql_explanation": generated_sql_explanation,
             "query_plan": query_plan,
             "query_run": query_run,
             "raw": llm_plan.get("raw", ""),
+            "value_resolution": value_resolution_changes,
         }
 
     def _build_playbook_context(
@@ -139,7 +196,7 @@ class SqlResultAgentService:
         return {
             "scene_playbook": playbook,
             "selected_preset": selected_preset,
-            "generation_rules": self._generation_rules(selected_preset),
+            "generation_rules": self._generation_rules(selected_preset, context=context),
         }
 
     def _best_matching_preset(
@@ -212,10 +269,16 @@ class SqlResultAgentService:
         )
         return {keyword for keyword in keywords if keyword in normalized_text}
 
-    def _generation_rules(self, selected_preset: dict[str, Any] | None) -> list[str]:
+    def _generation_rules(
+        self,
+        selected_preset: dict[str, Any] | None,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> list[str]:
         rules = [
             "SQL方言必须是 MySQL 8.0；日期窗口只能使用 DATE_SUB(anchor_date, INTERVAL 30 DAY) 或 >= anchor_date，禁止 PostgreSQL 写法 INTERVAL '30 day'。",
             "“最近/近30天/近期”必须锚定数据中的最大日期：抓取批次用 MAX(DATE(ReceiveTime))，上新用 MAX(DATE(CreateTime))，不能使用系统当前日期 CURRENT_DATE 作为数据窗口锚点。",
+            "括号或全角括号中的内容默认视为限定词或备注，不要并入品牌主值；只有当 context 里的 semantic_fields 明确有对应字段且能匹配到标准值时，才把括号内容拆成独立过滤条件。",
             "禁止生成任何未绑定占位符或伪参数，包括 :subcategory、:brand、?、${value}、<value>、待确认、待补充；没有具体过滤值时不要写等值过滤。",
             "如果问题里出现“指定二级类目/指定品牌/某类目/某品牌”，但 context 没有提供具体字段值，必须按该字段分组或返回空 sql 说明缺少参数，不能自行发明参数。",
             "只能使用 semantic_fields 中出现的 table_name.field_name，以及 relations 中声明的关联；不要臆造平台、销量、尺码等当前场景未配置或不可用字段。",
@@ -231,10 +294,76 @@ class SqlResultAgentService:
             rules.append(
                 "当前请求命中了 selected_preset，必须优先遵守 selected_preset.field_requirements、derived_metrics、group_by、sort、limit、notes。"
             )
+        if self._confirmed_field_resolutions(context):
+            rules.append(
+                "context.field_resolution.confirmed_resolutions 是用户在界面人工确认的字段值映射，必须作为过滤条件使用："
+                "按 semantic_name/table_name.field_name 与 canonical_value 精确落 SQL，不要改成其他字段或忽略。"
+            )
+        if self._ignored_field_resolution_terms(context):
+            rules.append(
+                "context.field_resolution.ignored_terms 是用户确认不作为过滤条件的词，只能当备注，不要据此新增 WHERE 条件。"
+            )
         return rules
 
     def _normalize_text(self, value: Any) -> str:
         return "".join(str(value or "").strip().lower().split())
+
+    def _field_disambiguation_context(self, context: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(context, dict):
+            return {"confirmed_resolutions": [], "ignored_terms": []}
+        raw = context.get("field_resolution")
+        if not isinstance(raw, dict):
+            return {"confirmed_resolutions": [], "ignored_terms": []}
+        confirmed = raw.get("confirmed_resolutions")
+        ignored = raw.get("ignored_terms")
+        return {
+            "confirmed_resolutions": self._confirmed_field_resolutions(context),
+            "ignored_terms": [str(item).strip() for item in ignored if str(item).strip()] if isinstance(ignored, list) else [],
+            "analysis_intent": str(raw.get("intent") or "").strip(),
+        }
+
+    def _confirmed_field_resolutions(self, context: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not isinstance(context, dict):
+            return []
+        raw = context.get("field_resolution")
+        if not isinstance(raw, dict):
+            return []
+        confirmed = raw.get("confirmed_resolutions")
+        if not isinstance(confirmed, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for item in confirmed:
+            if not isinstance(item, dict):
+                continue
+            semantic_name = str(item.get("semantic_name") or "").strip()
+            table_name = str(item.get("table_name") or "").strip()
+            field_name = str(item.get("field_name") or "").strip()
+            canonical_value = str(item.get("canonical_value") or "").strip()
+            if not semantic_name or not table_name or not field_name or not canonical_value:
+                continue
+            result.append(
+                {
+                    "term": str(item.get("term") or item.get("raw_value") or "").strip(),
+                    "semantic_name": semantic_name,
+                    "table_name": table_name,
+                    "field_name": field_name,
+                    "canonical_value": canonical_value,
+                    "score": item.get("score"),
+                    "strategy": str(item.get("strategy") or "").strip(),
+                }
+            )
+        return result
+
+    def _ignored_field_resolution_terms(self, context: dict[str, Any] | None) -> list[str]:
+        if not isinstance(context, dict):
+            return []
+        raw = context.get("field_resolution")
+        if not isinstance(raw, dict):
+            return []
+        ignored = raw.get("ignored_terms")
+        if not isinstance(ignored, list):
+            return []
+        return [str(item).strip() for item in ignored if str(item).strip()]
 
     def _queryable_semantic_fields(self, scene: SceneDTO) -> list[dict]:
         rows = semantic_field_cache_service.get_queryable_scene_fields(scene.scene_id)
@@ -317,6 +446,22 @@ class SqlResultAgentService:
             if value:
                 result.append(value)
         return result
+
+    def _value_resolution_notes(self, changes: list[dict[str, Any]]) -> list[str]:
+        notes: list[str] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in changes:
+            raw_value = str(item.get("raw_value") or item.get("sql_literal") or "").strip()
+            canonical_value = str(item.get("canonical_value") or "").strip()
+            semantic_name = str(item.get("semantic_name") or item.get("field_name") or "").strip()
+            if not raw_value or not canonical_value or raw_value == canonical_value:
+                continue
+            key = (semantic_name, raw_value, canonical_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            notes.append(f"字段值解析：{semantic_name} '{raw_value}' -> '{canonical_value}'")
+        return notes
 
     def _validate_llm_sql_output(self, *, intent: str, sql: str, plan: QueryPlanDTO | None) -> str:
         sql_text = str(sql or "").strip()

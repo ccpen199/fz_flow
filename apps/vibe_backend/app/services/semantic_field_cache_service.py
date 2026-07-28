@@ -366,6 +366,93 @@ class SemanticFieldCacheService:
             conn.close()
         return affected
 
+    def replace_scene_fields(
+        self,
+        scene_id: str,
+        fields: list[dict],
+        *,
+        target_zone: str = "modeled",
+        delete_zones: tuple[str, ...] = ("modeled", "effective"),
+    ) -> int:
+        scene_key = str(scene_id or "").strip()
+        zone_key = self._normalize_zone(target_zone)
+        if not scene_key:
+            return 0
+
+        rows: list[tuple] = []
+        seen_keys: set[tuple[str, str, str, str]] = set()
+        for field in fields or []:
+            semantic_name = str(field.get("semantic_name") or "").strip()
+            table_name = str(field.get("table_name") or "").strip()
+            field_name = str(field.get("field_name") or "").strip()
+            if not semantic_name or not table_name or not field_name:
+                continue
+            source_key = self._build_source_key(semantic_name, table_name, field_name)
+            dedupe_key = (zone_key, semantic_name.lower(), table_name.lower(), field_name.lower())
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            cache_key = str(field.get("cache_id") or "").strip() or f"sem_{uuid4().hex[:12]}"
+            aliases = self._normalize_aliases(field.get("aliases") if isinstance(field.get("aliases"), list) else [])
+            rows.append(
+                (
+                    cache_key,
+                    scene_key,
+                    zone_key,
+                    semantic_name,
+                    str(field.get("semantic_definition") or field.get("description") or "").strip(),
+                    json.dumps(aliases, ensure_ascii=False),
+                    str(field.get("unit") or "").strip(),
+                    str(field.get("aggregation") or "").strip(),
+                    table_name,
+                    field_name,
+                    source_key,
+                    str(field.get("er_path") or "").strip(),
+                    self._normalize_role(str(field.get("role") or FieldRole.DIMENSION.value)),
+                    1 if bool(field.get("enabled", True)) else 0,
+                )
+            )
+
+        conn = self._connect()
+        try:
+            self._ensure_tables(conn)
+            with conn.cursor() as cur:
+                for zone in delete_zones:
+                    cur.execute(
+                        "DELETE FROM vibe_semantic_field_cache WHERE scene_id = %s AND zone = %s",
+                        (scene_key, self._normalize_zone(zone)),
+                    )
+                if rows:
+                    cur.executemany(
+                        """
+                        INSERT INTO vibe_semantic_field_cache (
+                          cache_id, scene_id, zone, semantic_name, semantic_definition,
+                          aliases_json, unit, aggregation, table_name, field_name, source_key, er_path,
+                          role, enabled
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                          scene_id = VALUES(scene_id),
+                          zone = VALUES(zone),
+                          semantic_name = VALUES(semantic_name),
+                          semantic_definition = VALUES(semantic_definition),
+                          aliases_json = VALUES(aliases_json),
+                          unit = VALUES(unit),
+                          aggregation = VALUES(aggregation),
+                          table_name = VALUES(table_name),
+                          field_name = VALUES(field_name),
+                          source_key = VALUES(source_key),
+                          er_path = VALUES(er_path),
+                          role = VALUES(role),
+                          enabled = VALUES(enabled)
+                        """,
+                        rows,
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+        return len(rows)
+
     def upsert_effective_fields_from_candidates(
         self,
         scene_id: str,

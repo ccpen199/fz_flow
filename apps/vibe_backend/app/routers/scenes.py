@@ -64,7 +64,7 @@ def _sync_prd_semantic_cache(template: dict) -> int:
     semantic_field_cache_service.delete_scene_fields_by_zone(scene_id, "modeled")
     semantic_field_cache_service.delete_scene_fields_by_zone(scene_id, "effective")
 
-    upserted = 0
+    prepared_fields: list[dict] = []
     for field in semantic_fields:
         semantic_name = str(field.get("semantic_name") or "").strip()
         table_name = str(field.get("table_name") or "").strip()
@@ -73,9 +73,9 @@ def _sync_prd_semantic_cache(template: dict) -> int:
             continue
         raw_key = f"{scene_id}|modeled|{semantic_name}|{table_name}|{field_name}"
         cache_id = f"sem_{hashlib.md5(raw_key.encode('utf-8')).hexdigest()[:20]}"
-        semantic_field_cache_service.upsert_field(
-            scene_id,
+        prepared_fields.append(
             {
+                "cache_id": cache_id,
                 "semantic_name": semantic_name,
                 "semantic_definition": str(field.get("description") or "").strip(),
                 "aliases": list(field.get("aliases") or []),
@@ -88,9 +88,14 @@ def _sync_prd_semantic_cache(template: dict) -> int:
                 "zone": "modeled",
                 "enabled": True,
             },
-            cache_id=cache_id,
         )
-        upserted += 1
+
+    upserted = semantic_field_cache_service.replace_scene_fields(
+        scene_id,
+        prepared_fields,
+        target_zone="modeled",
+        delete_zones=("modeled", "effective"),
+    )
 
     _SEMANTIC_SYNCED_SCENES.add(scene_id)
     return upserted

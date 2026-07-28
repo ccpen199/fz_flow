@@ -139,6 +139,10 @@ def _literal_lookup_parts(value: str) -> tuple[str, str, str]:
     return prefix, core, suffix
 
 
+def _condition_operator(condition: dict[str, Any]) -> str:
+    return str(condition.get("operator") or condition.get("op") or "=").strip().lower()
+
+
 @dataclass(frozen=True)
 class FieldValueCandidate:
     value: str
@@ -241,7 +245,7 @@ class FieldValueResolverService:
                 normalized_filters.append(next_condition)
                 continue
 
-            operator = str(condition.get("operator") or "=").strip().lower()
+            operator = _condition_operator(condition)
             value = condition.get("value")
             if operator == "in" and isinstance(value, list):
                 next_values = []
@@ -287,6 +291,74 @@ class FieldValueResolverService:
             semantic_name=semantic_name,
         )
         return resolved.get("canonical_value") if resolved.get("resolved") else raw_value
+
+    def find_unresolved_filter_conditions(
+        self,
+        *,
+        filters: list[dict[str, Any]],
+        scene: Any,
+        queryable_fields: list[Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        if not filters:
+            return []
+
+        field_lookup = {
+            _field_attr(field, "semantic_name").strip().lower(): field
+            for field in self._candidate_fields(scene=scene, queryable_fields=queryable_fields)
+            if _field_attr(field, "semantic_name")
+        }
+        issues: list[dict[str, Any]] = []
+        for condition in filters:
+            if not isinstance(condition, dict):
+                continue
+            field = field_lookup.get(str(condition.get("field") or "").strip().lower())
+            if not field:
+                continue
+            operator = _condition_operator(condition)
+            raw_values = self._filter_lookup_values(operator=operator, value=condition.get("value"))
+            if not raw_values:
+                continue
+
+            table_name = _field_attr(field, "table_name")
+            field_name = _field_attr(field, "field_name")
+            semantic_name = _field_attr(field, "semantic_name")
+            values = self._load_field_values(table_name=table_name, field_name=field_name)
+            if not values:
+                continue
+            for raw_value in raw_values:
+                resolved = self.resolve_field_value(
+                    table_name=table_name,
+                    field_name=field_name,
+                    raw_value=raw_value,
+                    semantic_name=semantic_name,
+                    candidate_values=values,
+                )
+                if resolved.get("resolved"):
+                    continue
+                issues.append(
+                    {
+                        "semantic_name": semantic_name,
+                        "table_name": table_name,
+                        "field_name": field_name,
+                        "operator": operator,
+                        "raw_value": raw_value,
+                        "candidate_values": [
+                            {"value": item.value, "count": item.count}
+                            for item in values[:8]
+                        ],
+                        "fuzzy_candidates": resolved.get("candidates", []),
+                    }
+                )
+        return issues
+
+    def _filter_lookup_values(self, *, operator: str, value: Any) -> list[str]:
+        if operator == "in" and isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if operator in {"=", "like"} and isinstance(value, str):
+            _, core, _ = _literal_lookup_parts(value) if operator == "like" else ("", value, "")
+            core = core.strip()
+            return [core] if core else []
+        return []
 
     def resolve_field_value(
         self,

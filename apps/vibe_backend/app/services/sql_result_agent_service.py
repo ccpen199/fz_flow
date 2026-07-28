@@ -85,6 +85,7 @@ class SqlResultAgentService:
             intent=intent,
         )
         value_resolution_changes: list[dict[str, Any]] = []
+        unresolved_filter_issues: list[dict[str, Any]] = []
         if query_plan is not None:
             normalized_filters, filter_changes = field_value_resolver_service.normalize_filter_conditions(
                 filters=query_plan.filters,
@@ -98,6 +99,16 @@ class SqlResultAgentService:
                     *self._value_resolution_notes(filter_changes),
                 ]
                 value_resolution_changes.extend(filter_changes)
+            unresolved_filter_issues = field_value_resolver_service.find_unresolved_filter_conditions(
+                filters=query_plan.filters,
+                scene=scene,
+                queryable_fields=available,
+            )
+            if unresolved_filter_issues:
+                query_plan.risk_notes = [
+                    *query_plan.risk_notes,
+                    *self._unresolved_filter_notes(unresolved_filter_issues),
+                ]
         query_run: QueryRunDTO | None = None
         generated_sql = str((llm_plan or {}).get("sql") or "").strip()
         generated_sql_explanation = str((llm_plan or {}).get("sql_explanation") or "").strip()
@@ -109,7 +120,12 @@ class SqlResultAgentService:
             )
             value_resolution_changes.extend(sql_value_changes)
         if execute:
-            output_error = self._validate_llm_sql_output(intent=intent, sql=generated_sql, plan=query_plan)
+            output_error = self._validate_llm_sql_output(
+                intent=intent,
+                sql=generated_sql,
+                plan=query_plan,
+                unresolved_filter_issues=unresolved_filter_issues,
+            )
             if output_error:
                 query_run = self._failed_query_run(
                     session_id=session_id,
@@ -463,11 +479,43 @@ class SqlResultAgentService:
             notes.append(f"字段值解析：{semantic_name} '{raw_value}' -> '{canonical_value}'")
         return notes
 
-    def _validate_llm_sql_output(self, *, intent: str, sql: str, plan: QueryPlanDTO | None) -> str:
+    def _unresolved_filter_notes(self, issues: list[dict[str, Any]]) -> list[str]:
+        notes: list[str] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in issues:
+            semantic_name = str(item.get("semantic_name") or item.get("field_name") or "").strip()
+            raw_value = str(item.get("raw_value") or "").strip()
+            table_name = str(item.get("table_name") or "").strip()
+            field_name = str(item.get("field_name") or "").strip()
+            if not semantic_name or not raw_value:
+                continue
+            key = (semantic_name, table_name, raw_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            notes.append(
+                f"字段值未命中：{semantic_name} '{raw_value}' 不在当前数据库 {table_name}.{field_name} 的标准值中。"
+            )
+        return notes
+
+    def _validate_llm_sql_output(
+        self,
+        *,
+        intent: str,
+        sql: str,
+        plan: QueryPlanDTO | None,
+        unresolved_filter_issues: list[dict[str, Any]] | None = None,
+    ) -> str:
         sql_text = str(sql or "").strip()
         if not sql_text:
             risk_notes = "; ".join(plan.risk_notes) if plan and plan.risk_notes else "LLM 未返回可执行 SQL。"
             return f"SQL Agent 未返回可执行 SQL：{risk_notes}"
+        if unresolved_filter_issues:
+            notes = "；".join(self._unresolved_filter_notes(unresolved_filter_issues))
+            return (
+                f"SQL Agent 生成了当前数据库无法命中的标准值过滤，已阻止执行：{notes}。"
+                "请确认字段值写法、先在字段筛选中选择已有标准值，或切换到包含该数据的数据源。"
+            )
         if _UNBOUND_PLACEHOLDER_RE.search(sql_text):
             return "SQL Agent 返回了未绑定占位符，已阻止执行。"
         if _NON_MYSQL_INTERVAL_RE.search(sql_text):

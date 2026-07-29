@@ -23,6 +23,18 @@ const state = {
   restoreSessionId: "",
   restoredGoalInput: "",
   restoredQueryIntentInput: "",
+  priceBandMode: "adaptive",
+  priceBandPolicy: {
+    mode: "adaptive",
+    bucket_count: 10,
+    strategy: "equal_width",
+    boundary: {
+      enabled: true,
+      rounding: "auto",
+      open_ended: true,
+      custom_boundaries: [],
+    },
+  },
   currentSceneDetail: null,
   currentScenePlaybook: null,
   selectedPresetKey: "",
@@ -84,11 +96,29 @@ function loadStoredUiState() {
   const sessionId = String(saved.currentSessionId || "").trim();
   const activeTab = String(saved.activeTab || "").trim();
   const pptScheme = String(saved.pptScheme || "").trim();
+  const rawPriceBandPolicy = saved.priceBandPolicy && typeof saved.priceBandPolicy === "object" ? saved.priceBandPolicy : {};
+  const priceBandMode = String(rawPriceBandPolicy.mode || saved.priceBandMode || "").trim();
+  const hasStoredPriceBandBoundary =
+    Boolean(rawPriceBandPolicy.boundary) ||
+    Object.prototype.hasOwnProperty.call(rawPriceBandPolicy, "boundary_enabled") ||
+    Object.prototype.hasOwnProperty.call(rawPriceBandPolicy, "boundary_rounding") ||
+    Object.prototype.hasOwnProperty.call(rawPriceBandPolicy, "custom_boundaries") ||
+    Object.prototype.hasOwnProperty.call(rawPriceBandPolicy, "boundaries");
   state.backendBase = normalizeBackendBase(backendBase || state.backendBase);
   if (sceneId) state.currentSceneId = sceneId;
   if (sessionId) state.restoreSessionId = sessionId;
   if (VALID_TABS.has(activeTab)) state.activeTab = activeTab;
   if (pptScheme) state.pptScheme = pptScheme;
+  state.priceBandPolicy = normalizePriceBandPolicyRaw({
+    mode: priceBandMode || state.priceBandPolicy.mode,
+    bucket_count: rawPriceBandPolicy.bucket_count ?? rawPriceBandPolicy.adaptive_bucket_count ?? state.priceBandPolicy.bucket_count,
+    strategy: rawPriceBandPolicy.strategy || state.priceBandPolicy.strategy,
+    boundary: hasStoredPriceBandBoundary ? rawPriceBandPolicy.boundary || {} : state.priceBandPolicy.boundary,
+    boundary_enabled: rawPriceBandPolicy.boundary_enabled,
+    boundary_rounding: rawPriceBandPolicy.boundary_rounding,
+    custom_boundaries: rawPriceBandPolicy.custom_boundaries || rawPriceBandPolicy.boundaries || [],
+  });
+  state.priceBandMode = state.priceBandPolicy.mode;
   state.restoredGoalInput = String(saved.goalInput || "").trim();
   state.restoredQueryIntentInput = String(saved.queryIntentInput || "").trim();
 }
@@ -101,6 +131,8 @@ function persistUiState() {
       currentSessionId: state.currentSession?.session_id || state.restoreSessionId || "",
       activeTab: VALID_TABS.has(state.activeTab) ? state.activeTab : "config",
       pptScheme: state.pptScheme || "presenton_ai",
+      priceBandMode: normalizePriceBandMode(state.priceBandPolicy?.mode || state.priceBandMode),
+      priceBandPolicy: normalizePriceBandPolicyRaw(state.priceBandPolicy),
       goalInput: el("goalInput")?.value || state.restoredGoalInput || "",
       queryIntentInput: el("queryIntentInput")?.value || state.restoredQueryIntentInput || "",
     };
@@ -119,6 +151,176 @@ function restoreTextInputs() {
   }
 }
 
+function normalizePriceBandMode(value) {
+  return "adaptive";
+}
+
+function normalizePriceBandBucketCount(value, fallback = 5) {
+  const fallbackCount = Number.isFinite(Number(fallback)) ? Number.parseInt(String(fallback), 10) : 5;
+  const safeFallback = Number.isFinite(fallbackCount) && fallbackCount > 1 ? fallbackCount : 5;
+  const raw = String(value ?? "").trim();
+  if (!raw) return safeFallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 1) return safeFallback;
+  return Math.min(Math.max(parsed, 2), 20);
+}
+
+function normalizePriceBandStrategy(value) {
+  const strategy = String(value || "").trim().toLowerCase();
+  if (strategy === "equal_width" || strategy === "rounded_width") return "equal_width";
+  return "quantile";
+}
+
+function parsePriceBandCustomBoundaries(value) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(/[,，、\s]+/)
+        .filter(Boolean);
+  const values = rawValues
+    .map((item) => Number.parseFloat(String(item).trim()))
+    .filter((item) => Number.isFinite(item));
+  return Array.from(new Set(values)).sort((a, b) => a - b);
+}
+
+function normalizePriceBandBoundaryRounding(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "100" || raw === "hundred" || raw === "整百") return "hundred";
+  if (raw === "1000" || raw === "thousand" || raw === "整千") return "thousand";
+  return "auto";
+}
+
+function normalizePriceBandBoolean(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on", "开启", "启用", "是"].includes(raw)) return true;
+  if (["0", "false", "no", "off", "关闭", "禁用", "否"].includes(raw)) return false;
+  return fallback;
+}
+
+function normalizePriceBandBoundary(rawBoundary = {}, fallbackBoundary = {}) {
+  const boundary = rawBoundary && typeof rawBoundary === "object" ? rawBoundary : {};
+  const enabledValue = boundary.enabled ?? rawBoundary?.boundary_enabled ?? fallbackBoundary.enabled ?? false;
+  return {
+    enabled: normalizePriceBandBoolean(enabledValue, Boolean(fallbackBoundary.enabled)),
+    rounding: normalizePriceBandBoundaryRounding(boundary.rounding ?? rawBoundary?.boundary_rounding ?? fallbackBoundary.rounding ?? "auto"),
+    open_ended: normalizePriceBandBoolean(boundary.open_ended ?? fallbackBoundary.open_ended ?? true, true),
+    custom_boundaries: parsePriceBandCustomBoundaries(
+      boundary.custom_boundaries ?? rawBoundary?.custom_boundaries ?? rawBoundary?.boundaries ?? fallbackBoundary.custom_boundaries ?? [],
+    ),
+  };
+}
+
+function formatPriceBandCustomBoundaries(boundaries) {
+  return parsePriceBandCustomBoundaries(boundaries)
+    .map((item) => (Number.isInteger(item) ? String(item) : String(Number(item.toFixed(2)))))
+    .join(", ");
+}
+
+function normalizePriceBandPolicyRaw(policy = {}) {
+  const rawStrategy = String(policy.strategy || "").trim().toLowerCase();
+  const migratedRoundedBoundary = rawStrategy === "rounded_width";
+  const strategy = migratedRoundedBoundary ? "equal_width" : normalizePriceBandStrategy(policy.strategy || "equal_width");
+  const boundary = normalizePriceBandBoundary(
+    {
+      ...(policy.boundary && typeof policy.boundary === "object" ? policy.boundary : {}),
+      enabled: policy.boundary?.enabled ?? policy.boundary_enabled ?? migratedRoundedBoundary,
+      rounding: policy.boundary?.rounding ?? policy.boundary_rounding,
+      custom_boundaries: policy.boundary?.custom_boundaries ?? policy.custom_boundaries ?? policy.boundaries,
+    },
+    { enabled: false, rounding: "auto", open_ended: true, custom_boundaries: [] },
+  );
+  if (strategy !== "equal_width") boundary.enabled = false;
+  return {
+    mode: normalizePriceBandMode(policy.mode || "adaptive"),
+    bucket_count: normalizePriceBandBucketCount(policy.bucket_count ?? policy.adaptive_bucket_count ?? 10, 10),
+    strategy,
+    boundary,
+  };
+}
+
+function getPriceBandPolicyDefaults() {
+  const policy = state.currentScenePlaybook?.price_band_policy || {};
+  const rawTemplate = Array.isArray(state.currentScenePlaybook?.price_band_template)
+    ? state.currentScenePlaybook.price_band_template.filter((item) => item && typeof item === "object")
+    : [];
+  const modeOptions = Array.isArray(policy.mode_options)
+    ? policy.mode_options
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter((item) => item === "adaptive")
+    : [];
+  return {
+    defaultMode: normalizePriceBandMode(policy.default_mode || "adaptive"),
+    defaultBucketCount: normalizePriceBandBucketCount(policy.adaptive_bucket_count || 10, 10),
+    defaultStrategy: normalizePriceBandStrategy(policy.strategy || "equal_width"),
+    defaultBoundary: normalizePriceBandBoundary(policy.boundary || {}, {
+      enabled: false,
+      rounding: "auto",
+      open_ended: true,
+      custom_boundaries: [],
+    }),
+    fixedTemplate: rawTemplate,
+    modeOptions: modeOptions.length ? modeOptions : ["adaptive"],
+  };
+}
+
+function normalizePriceBandPolicy(policy = {}) {
+  const defaults = getPriceBandPolicyDefaults();
+  const next = normalizePriceBandPolicyRaw({
+    mode: policy.mode || defaults.defaultMode,
+    bucket_count: policy.bucket_count ?? policy.adaptive_bucket_count ?? defaults.defaultBucketCount,
+    strategy: policy.strategy || defaults.defaultStrategy,
+    boundary: normalizePriceBandBoundary(policy.boundary || {}, defaults.defaultBoundary),
+  });
+  if (!defaults.modeOptions.includes(next.mode)) {
+    next.mode = defaults.modeOptions.includes(defaults.defaultMode) ? defaults.defaultMode : defaults.modeOptions[0] || "adaptive";
+  }
+  return next;
+}
+
+function formatPriceBandModeLabel(mode) {
+  const raw = String(mode || "").trim().toLowerCase();
+  return raw === "fixed" ? "固定模板（历史兼容）" : "自定义分桶";
+}
+
+function formatPriceBandStrategyLabel(strategy) {
+  const normalized = normalizePriceBandStrategy(strategy);
+  if (normalized === "equal_width") return "等宽";
+  return "分位数";
+}
+
+function describePriceBandStrategy(strategy) {
+  const normalized = normalizePriceBandStrategy(strategy);
+  if (normalized === "equal_width") {
+    return "按当前分组内的最低价到最高价等宽切分，价格区间宽度一致，但每个区间的SKU数可能差异很大。";
+  }
+  if (normalized === "quantile") {
+    return "按当前分组内的不同价格点排序做分位切分，同一个价格不会被拆到不同价格带；桶数越大越细，但每桶SKU数可能不同。";
+  }
+  return "";
+}
+
+function getSelectedPriceBandPolicy() {
+  const defaults = getPriceBandPolicyDefaults();
+  const activeButton = document.querySelector("#priceBandModeToggle .price-band-mode-btn.is-active");
+  const activeStrategyButton = document.querySelector("#priceBandStrategyToggle .price-band-strategy-btn.is-active");
+  const bucketInput = el("priceBandBucketCountInput");
+  const policy = {
+    mode: activeButton?.dataset?.priceBandMode || state.priceBandPolicy?.mode || defaults.defaultMode,
+    bucket_count: bucketInput?.value || state.priceBandPolicy?.bucket_count || defaults.defaultBucketCount,
+    strategy: activeStrategyButton?.dataset?.priceBandStrategy || state.priceBandPolicy?.strategy || defaults.defaultStrategy,
+    boundary: {
+      enabled: (document.querySelector("#priceBandBoundaryToggle .price-band-boundary-btn.is-active")?.dataset?.priceBandBoundary || "") === "rounded",
+      rounding: document.querySelector("#priceBandRoundToggle .price-band-round-btn.is-active")?.dataset?.priceBandRounding || state.priceBandPolicy?.boundary?.rounding || defaults.defaultBoundary.rounding,
+      open_ended: true,
+      custom_boundaries: parsePriceBandCustomBoundaries(el("priceBandBoundariesInput")?.value || state.priceBandPolicy?.boundary?.custom_boundaries || []),
+    },
+  };
+  return state.currentScenePlaybook ? normalizePriceBandPolicy(policy) : normalizePriceBandPolicyRaw(policy);
+}
+
 const SCENE_DOC_NAME_MAP = {
   "竞品分析": "竞品与价格分析",
   "上新趋势分析": "趋势与爆款分析",
@@ -134,7 +336,7 @@ const SCENE_INTENT_TEMPLATES = {
   "商品价格分析": [
     "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
     "各一级类目和二级类目的SKU数、平均价和价格跨度是多少，按SKU数降序返回前30",
-    "按品牌统计0-99、100-199、200-399、400-799、800+价格带分布和占比",
+    "按品牌统计价格带分布和占比，默认自定义分桶，可设置桶数、策略和边界",
     "最近抓取批次中各品牌平均价最高的是哪些，返回品牌、SKU数、平均价、最高价",
     "各来源站点域名的品牌覆盖、SKU数和平均价差异是什么",
     "各品牌在不同场景标签下的平均价差异是多少，注意这不是平台价差",
@@ -142,7 +344,7 @@ const SCENE_INTENT_TEMPLATES = {
   "品牌平台价格分析": [
     "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
     "各一级类目和二级类目的SKU数、平均价和价格跨度是多少，按SKU数降序返回前30",
-    "按品牌统计0-99、100-199、200-399、400-799、800+价格带分布和占比",
+    "按品牌统计价格带分布和占比，默认自定义分桶，可设置桶数、策略和边界",
     "最近抓取批次中各品牌平均价最高的是哪些，返回品牌、SKU数、平均价、最高价",
     "各来源站点域名的品牌覆盖、SKU数和平均价差异是什么",
     "各品牌在不同场景标签下的平均价差异是多少，注意这不是平台价差",
@@ -312,6 +514,160 @@ function fillIntentInputs(intent) {
   if (!text) return;
   if (el("queryIntentInput")) el("queryIntentInput").value = text;
   if (el("goalInput")) el("goalInput").value = text;
+  renderPriceBandModeControl();
+}
+
+function getSelectedPriceBandMode() {
+  return getSelectedPriceBandPolicy().mode;
+}
+
+function setPriceBandMode(mode) {
+  setPriceBandPolicy({ mode });
+}
+
+function setPriceBandPolicy(partial = {}) {
+  const nextPolicy = { ...state.priceBandPolicy, ...partial };
+  state.priceBandPolicy = state.currentScenePlaybook ? normalizePriceBandPolicy(nextPolicy) : normalizePriceBandPolicyRaw(nextPolicy);
+  state.priceBandMode = state.priceBandPolicy.mode;
+  renderPriceBandModeControl();
+}
+
+function currentQueryIntentText() {
+  return String(el("queryIntentInput")?.value || "").trim();
+}
+
+function isPriceBandIntent(intent) {
+  const text = String(intent || "").trim();
+  if (!text) return false;
+  const compact = normalizeIntent(text);
+  const compactEnglish = text.toLowerCase().replace(/[\s_\-]+/g, "");
+  return (
+    text.includes("价格带") ||
+    text.includes("分桶") ||
+    text.includes("价格区间") ||
+    text.includes("价格段") ||
+    text.includes("价位段") ||
+    text.includes("价位带") ||
+    text.includes("价位区间") ||
+    text.includes("价格分层") ||
+    text.includes("价格层次") ||
+    compact.includes("价格分布") ||
+    compactEnglish.includes("priceband") ||
+    compactEnglish.includes("pricebucket") ||
+    compactEnglish.includes("pricerange") ||
+    compactEnglish.includes("pricegroup")
+  );
+}
+
+function shouldShowPriceBandControls(intent = currentQueryIntentText()) {
+  const text = String(intent || "").trim();
+  if (!text) return false;
+  if (isPriceBandIntent(text)) return true;
+  return Boolean(
+    state.selectedPresetKey &&
+      state.selectedPresetQuestion &&
+      normalizeIntent(text) === normalizeIntent(state.selectedPresetQuestion) &&
+      isPriceBandIntent(state.selectedPresetQuestion),
+  );
+}
+
+function renderPriceBandModeControl() {
+  const toolbar = document.querySelector(".query-band-toolbar");
+  const visible = shouldShowPriceBandControls();
+  if (toolbar) toolbar.hidden = !visible;
+  const modeButtons = Array.from(document.querySelectorAll("#priceBandModeToggle .price-band-mode-btn"));
+  const strategyButtons = Array.from(document.querySelectorAll("#priceBandStrategyToggle .price-band-strategy-btn"));
+  const boundaryButtons = Array.from(document.querySelectorAll("#priceBandBoundaryToggle .price-band-boundary-btn"));
+  const roundButtons = Array.from(document.querySelectorAll("#priceBandRoundToggle .price-band-round-btn"));
+  const bucketInput = el("priceBandBucketCountInput");
+  const boundariesInput = el("priceBandBoundariesInput");
+  const bucketControl = el("priceBandBucketCountControl");
+  const strategyControl = el("priceBandStrategyControl");
+  const boundaryControl = el("priceBandBoundaryControl");
+  const roundUnitControl = el("priceBandRoundUnitControl");
+  const boundariesControl = el("priceBandBoundariesControl");
+  const hint = el("priceBandModeHint");
+  const summary = el("priceBandPolicySummary");
+  if (!visible) {
+    if (hint) hint.textContent = "";
+    if (summary) summary.innerHTML = "";
+  }
+  const nextPolicy = state.currentScenePlaybook ? normalizePriceBandPolicy(state.priceBandPolicy) : normalizePriceBandPolicyRaw(state.priceBandPolicy);
+  for (const button of modeButtons) {
+    const mode = button.dataset.priceBandMode || "";
+    const active = mode === nextPolicy.mode;
+    button.classList.toggle("is-active", active);
+    button.disabled = mode !== "adaptive";
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.title = "通过桶数、策略和边界配置价格带；固定区间可用手动边界表达";
+  }
+  if (bucketInput) bucketInput.value = String(nextPolicy.bucket_count);
+  if (boundariesInput) boundariesInput.value = formatPriceBandCustomBoundaries(nextPolicy.boundary?.custom_boundaries || []);
+  if (bucketControl) bucketControl.hidden = false;
+  if (strategyControl) strategyControl.hidden = false;
+  const boundaryAvailable = nextPolicy.strategy === "equal_width";
+  const boundaryEnabled = Boolean(nextPolicy.boundary?.enabled) && boundaryAvailable;
+  if (boundaryControl) boundaryControl.hidden = !boundaryAvailable;
+  if (roundUnitControl) roundUnitControl.hidden = !boundaryEnabled;
+  if (boundariesControl) boundariesControl.hidden = !boundaryEnabled;
+  for (const button of strategyButtons) {
+    const strategy = normalizePriceBandStrategy(button.dataset.priceBandStrategy || "quantile");
+    const active = strategy === nextPolicy.strategy;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.title =
+      strategy === "equal_width"
+        ? "按每组最低价到最高价均分价格范围"
+        : "按每组价格排序做分位切分";
+  }
+  for (const button of boundaryButtons) {
+    const mode = button.dataset.priceBandBoundary || "raw";
+    const active = boundaryEnabled ? mode === "rounded" : mode === "raw";
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.title =
+      mode === "rounded"
+        ? "按整百/整千或手动边界输出价格带，首尾使用以下/以上"
+        : "按等宽计算出的原始小数边界输出";
+  }
+  for (const button of roundButtons) {
+    const rounding = normalizePriceBandBoundaryRounding(button.dataset.priceBandRounding || "auto");
+    const active = rounding === normalizePriceBandBoundaryRounding(nextPolicy.boundary?.rounding || "auto");
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  state.priceBandPolicy = nextPolicy;
+  state.priceBandMode = nextPolicy.mode;
+  if (!visible) {
+    persistUiState();
+    return;
+  }
+  if (hint) {
+    hint.textContent = "当前生效的是自定义分桶；改完桶数、策略或边界后直接生成并执行，这次设置会一起保存到历史。";
+  }
+  if (summary) {
+    const strategyLabel = formatPriceBandStrategyLabel(nextPolicy.strategy);
+    const strategyDescription = describePriceBandStrategy(nextPolicy.strategy);
+    const customBoundaries = formatPriceBandCustomBoundaries(nextPolicy.boundary?.custom_boundaries || []);
+    const boundarySummary = boundaryEnabled
+      ? `边界处理已开启：系统会按 ${nextPolicy.boundary?.rounding === "hundred" ? "整百" : nextPolicy.boundary?.rounding === "thousand" ? "整千" : "自动整百/整千"} 修正区间；${
+          customBoundaries ? `当前中间边界为 ${customBoundaries}，` : "未填写中间边界时自动生成，"
+        }首尾输出 XX元以下 / XX元以上。`
+      : "边界处理未开启：等宽策略会直接展示计算出的原始区间边界。";
+    const boundaryUsage =
+      nextPolicy.strategy === "equal_width"
+        ? boundarySummary
+        : "分位数策略不使用手动边界；需要固定区间或边界输入时请切换到等宽，并开启边界处理。";
+    summary.innerHTML = `
+      <div class="query-band-detail is-active">
+        <strong>当前生效：自定义分桶</strong>
+        <span>SQL 会基于当前查询过滤后的数据，在每个分组内最多生成 ${nextPolicy.bucket_count} 个价格带；桶数越大，价格层次越细，返回行数通常也会增加。</span>
+        <span>当前策略：${escapeHtml(strategyLabel)}。${escapeHtml(strategyDescription)}</span>
+        <span>${escapeHtml(boundaryUsage)}</span>
+        <span>需要固定区间时，不再切换模式，直接在“中间边界”输入区间边界，例如 100,200,400,800。</span>
+      </div>`;
+  }
+  persistUiState();
 }
 
 function resetFieldResolutionState() {
@@ -840,6 +1196,18 @@ function clearCurrentSceneDetailState() {
   state.semanticCacheFields = [];
   state.editingSemanticCacheId = "";
   state.currentLlmAgentDraft = null;
+  state.priceBandPolicy = {
+    mode: "adaptive",
+    bucket_count: 10,
+    strategy: "equal_width",
+    boundary: {
+      enabled: true,
+      rounding: "auto",
+      open_ended: true,
+      custom_boundaries: [],
+    },
+  };
+  state.priceBandMode = state.priceBandPolicy.mode;
 }
 
 function setCurrentSceneDetailPlaceholder() {
@@ -961,6 +1329,27 @@ function formatQueryRunView(queryRun) {
   lines.push(`# 状态: ${queryRun.status || "-"}`);
   lines.push(`# 返回行数: ${Number(queryRun.rows_count || 0)}`);
   lines.push(`# 耗时(ms): ${queryRun.duration_ms ?? "-"}`);
+  const lineage = queryRun.lineage && typeof queryRun.lineage === "object" ? queryRun.lineage : {};
+  const priceBandPolicy = lineage.price_band_policy && typeof lineage.price_band_policy === "object" ? lineage.price_band_policy : null;
+  if (priceBandPolicy) {
+    const template = Array.isArray(priceBandPolicy.fixed_template)
+      ? priceBandPolicy.fixed_template.map((item) => String(item?.band || "").trim()).filter(Boolean)
+      : [];
+    const rawMode = String(priceBandPolicy.mode || "").trim().toLowerCase();
+    lines.push(
+      `# 价格带策略: ${formatPriceBandModeLabel(rawMode)} · ${Number(priceBandPolicy.bucket_count || 0) || "-"}桶 · ${formatPriceBandStrategyLabel(priceBandPolicy.strategy || "equal_width")}`,
+    );
+    if (priceBandPolicy.boundary && typeof priceBandPolicy.boundary === "object") {
+      const boundary = priceBandPolicy.boundary;
+      const boundaryLabel = boundary.enabled ? "开启" : "关闭";
+      const roundingLabel = boundary.rounding === "hundred" ? "整百" : boundary.rounding === "thousand" ? "整千" : "自动";
+      const customBoundaries = formatPriceBandCustomBoundaries(boundary.custom_boundaries || []);
+      lines.push(`# 边界处理: ${boundaryLabel}${boundary.enabled ? ` · ${roundingLabel}${customBoundaries ? ` · 中间边界 ${customBoundaries}` : ""}` : ""}`);
+    }
+    if (rawMode === "fixed" && template.length) {
+      lines.push(`# 固定模板: ${template.join(" / ")}`);
+    }
+  }
   if (queryRun.sql_explanation) {
     lines.push(`# 说明: ${queryRun.sql_explanation}`);
   }
@@ -1501,6 +1890,8 @@ async function deleteScene(scene) {
     currentSceneId: state.currentSceneId,
     currentSceneDetail: state.currentSceneDetail,
     currentScenePlaybook: state.currentScenePlaybook,
+    priceBandPolicy: state.priceBandPolicy,
+    priceBandMode: state.priceBandMode,
     selectedPresetKey: state.selectedPresetKey,
     selectedPresetQuestion: state.selectedPresetQuestion,
     semanticCacheFields: state.semanticCacheFields,
@@ -1520,6 +1911,8 @@ async function deleteScene(scene) {
     state.currentSceneId = snapshot.currentSceneId;
     state.currentSceneDetail = snapshot.currentSceneDetail;
     state.currentScenePlaybook = snapshot.currentScenePlaybook;
+    state.priceBandPolicy = snapshot.priceBandPolicy;
+    state.priceBandMode = snapshot.priceBandMode;
     state.selectedPresetKey = snapshot.selectedPresetKey;
     state.selectedPresetQuestion = snapshot.selectedPresetQuestion;
     state.semanticCacheFields = snapshot.semanticCacheFields;
@@ -2135,6 +2528,7 @@ function renderTabs() {
     panel.classList.toggle("active", isActive);
     panel.hidden = !isActive;
   }
+  renderPriceBandModeControl();
 }
 
 function bindTabs() {
@@ -2387,6 +2781,18 @@ async function createScene() {
   state.scenes = [scene, ...state.scenes.filter((item) => item.scene_id !== scene.scene_id)];
   state.currentSceneDetail = scene;
   state.currentScenePlaybook = null;
+  state.priceBandPolicy = {
+    mode: "adaptive",
+    bucket_count: 10,
+    strategy: "equal_width",
+    boundary: {
+      enabled: true,
+      rounding: "auto",
+      open_ended: true,
+      custom_boundaries: [],
+    },
+  };
+  state.priceBandMode = state.priceBandPolicy.mode;
   state.semanticCacheFields = [];
   state.editingSemanticCacheId = "";
   state.currentLlmAgentDraft = null;
@@ -2445,6 +2851,7 @@ async function refreshSceneDetail() {
   }
   state.currentLlmAgentDraft = draft;
   renderSceneConfig();
+  renderPriceBandModeControl();
 }
 
 async function recommendSceneByLlm() {
@@ -2817,6 +3224,28 @@ async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {})
   switchToTab("query");
   clearQueryResultViews();
   if (el("querySaveHint")) el("querySaveHint").textContent = "执行中，完成后会自动保存到提问历史。";
+  const priceBandControlsEnabled = shouldShowPriceBandControls(intent);
+  const selectedPresetIsStalePriceBand =
+    state.selectedPresetKey && isPriceBandIntent(state.selectedPresetQuestion) && !isPriceBandIntent(intent);
+  const activePresetKey = selectedPresetIsStalePriceBand ? "" : state.selectedPresetKey;
+  const activePresetQuestion = selectedPresetIsStalePriceBand ? "" : state.selectedPresetQuestion;
+  const priceBandPolicy = priceBandControlsEnabled ? getSelectedPriceBandPolicy() : null;
+  const requestContext = {
+    source: "query_tab",
+    scene_id: state.currentSceneId,
+    selected_preset_key: activePresetKey || undefined,
+    selected_preset_question: activePresetQuestion || undefined,
+    intent_edited_from_preset: Boolean(
+      activePresetKey && normalizeIntent(intent) !== normalizeIntent(activePresetQuestion),
+    ),
+    selected_field_count: selectedFieldCount,
+    selected_relation_count: selectedRelationCount,
+    field_resolution: fieldResolutionPayload.field_resolution,
+  };
+  if (priceBandPolicy) {
+    requestContext.price_band_mode = priceBandPolicy.mode;
+    requestContext.price_band_policy = { ...priceBandPolicy };
+  }
   let result;
   try {
     result = await api(`/api/v1/sql-result-agent/sessions/${session.session_id}/generate-and-run`, {
@@ -2825,18 +3254,7 @@ async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {})
         intent,
         agent_prompt: (el("llmGoal")?.value || "").trim(),
         execute: true,
-        context: {
-          source: "query_tab",
-          scene_id: state.currentSceneId,
-          selected_preset_key: state.selectedPresetKey || undefined,
-          selected_preset_question: state.selectedPresetQuestion || undefined,
-          intent_edited_from_preset: Boolean(
-            state.selectedPresetKey && normalizeIntent(intent) !== normalizeIntent(state.selectedPresetQuestion),
-          ),
-          selected_field_count: selectedFieldCount,
-          selected_relation_count: selectedRelationCount,
-          field_resolution: fieldResolutionPayload.field_resolution,
-        },
+        context: requestContext,
       }),
     });
   } catch (error) {
@@ -3270,7 +3688,58 @@ function bind() {
   if (el("queryIntentInput")) {
     el("queryIntentInput").addEventListener("input", () => {
       resetFieldResolutionState();
+      renderPriceBandModeControl();
       persistUiState();
+    });
+  }
+  document.querySelectorAll("#priceBandModeToggle .price-band-mode-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      setPriceBandMode(button.dataset.priceBandMode || "adaptive");
+    });
+  });
+  if (el("priceBandBucketCountInput")) {
+    el("priceBandBucketCountInput").addEventListener("change", () => {
+      setPriceBandPolicy({ bucket_count: el("priceBandBucketCountInput").value });
+    });
+  }
+  document.querySelectorAll("#priceBandStrategyToggle .price-band-strategy-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      setPriceBandPolicy({ strategy: button.dataset.priceBandStrategy || "quantile" });
+    });
+  });
+  document.querySelectorAll("#priceBandBoundaryToggle .price-band-boundary-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const enabled = (button.dataset.priceBandBoundary || "raw") === "rounded";
+      setPriceBandPolicy({
+        strategy: "equal_width",
+        boundary: {
+          ...(state.priceBandPolicy.boundary || {}),
+          enabled,
+        },
+      });
+    });
+  });
+  document.querySelectorAll("#priceBandRoundToggle .price-band-round-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      setPriceBandPolicy({
+        boundary: {
+          ...(state.priceBandPolicy.boundary || {}),
+          enabled: true,
+          rounding: button.dataset.priceBandRounding || "auto",
+        },
+      });
+    });
+  });
+  if (el("priceBandBoundariesInput")) {
+    el("priceBandBoundariesInput").addEventListener("change", () => {
+      setPriceBandPolicy({
+        boundary: {
+          ...(state.priceBandPolicy.boundary || {}),
+          enabled: true,
+          custom_boundaries: parsePriceBandCustomBoundaries(el("priceBandBoundariesInput").value),
+        },
+      });
     });
   }
   if (el("guideBtn")) el("guideBtn").onclick = () => el("guideDialog").showModal();

@@ -335,7 +335,49 @@
                 <p class="muted">点击下方预制问题，可自动填入意图输入框。</p>
                 <div id="intentTemplateButtons" class="intent-template-list"></div>
               </div>
-              <textarea id="queryIntentInput" placeholder="例如：各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20"></textarea>
+              <textarea id="queryIntentInput" placeholder="例如：按品牌统计价格带分布和占比，默认自定义分桶，可设置桶数、策略和边界"></textarea>
+              <div class="query-band-toolbar" hidden>
+                <div class="query-band-control query-band-mode-control">
+                  <span class="label">价格带模式</span>
+                  <div id="priceBandModeToggle" class="price-band-mode-toggle" role="group" aria-label="价格带模式">
+                    <button id="priceBandModeAdaptiveBtn" class="price-band-mode-btn" type="button" data-price-band-mode="adaptive">自定义分桶</button>
+                  </div>
+                </div>
+                <label id="priceBandBucketCountControl" class="query-band-control">
+                  <span class="label">自适应桶数</span>
+                  <input id="priceBandBucketCountInput" type="number" min="2" max="20" step="1" />
+                </label>
+                <div id="priceBandStrategyControl" class="query-band-control">
+                  <span class="label">分桶策略</span>
+                  <div id="priceBandStrategyToggle" class="price-band-strategy-toggle" role="group" aria-label="分桶策略">
+                    <button id="priceBandStrategyQuantileBtn" class="price-band-strategy-btn" type="button" data-price-band-strategy="quantile">分位数</button>
+                    <button id="priceBandStrategyEqualWidthBtn" class="price-band-strategy-btn" type="button" data-price-band-strategy="equal_width">等宽</button>
+                  </div>
+                </div>
+                <div id="priceBandBoundaryControl" class="query-band-control">
+                  <span class="label">边界处理</span>
+                  <div id="priceBandBoundaryToggle" class="price-band-boundary-toggle" role="group" aria-label="边界处理">
+                    <button id="priceBandBoundaryRawBtn" class="price-band-boundary-btn" type="button" data-price-band-boundary="raw">原始</button>
+                    <button id="priceBandBoundaryRoundedBtn" class="price-band-boundary-btn" type="button" data-price-band-boundary="rounded">取整</button>
+                  </div>
+                </div>
+                <div id="priceBandRoundUnitControl" class="query-band-control">
+                  <span class="label">取整粒度</span>
+                  <div id="priceBandRoundToggle" class="price-band-round-toggle" role="group" aria-label="取整粒度">
+                    <button id="priceBandRoundAutoBtn" class="price-band-round-btn" type="button" data-price-band-rounding="auto">自动</button>
+                    <button id="priceBandRoundHundredBtn" class="price-band-round-btn" type="button" data-price-band-rounding="hundred">整百</button>
+                    <button id="priceBandRoundThousandBtn" class="price-band-round-btn" type="button" data-price-band-rounding="thousand">整千</button>
+                  </div>
+                </div>
+                <label id="priceBandBoundariesControl" class="query-band-control query-band-boundaries-control">
+                  <span class="label">中间边界</span>
+                  <input id="priceBandBoundariesInput" type="text" placeholder="可选：800,1200,1600" />
+                </label>
+                <div class="query-band-summary">
+                  <p id="priceBandModeHint" class="muted query-band-hint"></p>
+                  <div id="priceBandPolicySummary" class="query-band-summary-text"></div>
+                </div>
+              </div>
               <div class="actions compact-actions">
                 <button id="runQueryBtn">生成并执行</button>
               </div>

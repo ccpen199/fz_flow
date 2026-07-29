@@ -57,6 +57,8 @@ class SqlResultAgentService:
     ) -> dict:
         available = self._queryable_semantic_fields(scene)
         playbook_context = self._build_playbook_context(scene=scene, intent=intent, context=context)
+        selected_preset = playbook_context.get("selected_preset")
+        price_band_policy = playbook_context.get("price_band_policy") or {}
         field_disambiguation_context = self._field_disambiguation_context(context)
         value_resolution_context = field_value_resolver_service.build_scene_value_context(
             scene=scene,
@@ -73,7 +75,8 @@ class SqlResultAgentService:
             "relations": [item.model_dump(mode="json") for item in scene.relations],
             "context": context or {},
             "scene_playbook": playbook_context.get("scene_playbook"),
-            "selected_preset": playbook_context.get("selected_preset"),
+            "selected_preset": selected_preset,
+            "price_band_policy": price_band_policy,
             "generation_rules": playbook_context.get("generation_rules"),
             "value_resolution_context": value_resolution_context,
             "field_disambiguation_context": field_disambiguation_context,
@@ -109,9 +112,32 @@ class SqlResultAgentService:
                     *query_plan.risk_notes,
                     *self._unresolved_filter_notes(unresolved_filter_issues),
                 ]
-        query_run: QueryRunDTO | None = None
         generated_sql = str((llm_plan or {}).get("sql") or "").strip()
         generated_sql_explanation = str((llm_plan or {}).get("sql_explanation") or "").strip()
+        price_band_override = self._build_price_band_sql(
+            scene=scene,
+            query_plan=query_plan,
+            selected_preset=selected_preset,
+            price_band_policy=price_band_policy,
+            field_disambiguation_context=field_disambiguation_context,
+            intent=intent,
+            queryable_fields=available,
+        )
+        if price_band_override:
+            generated_sql = price_band_override["sql"]
+            generated_sql_explanation = price_band_override["sql_explanation"]
+            if query_plan is not None:
+                if price_band_override.get("metrics"):
+                    query_plan.metrics = list(price_band_override["metrics"])
+                if price_band_override.get("dimensions"):
+                    query_plan.dimensions = list(price_band_override["dimensions"])
+                if price_band_override.get("time_window") is not None:
+                    query_plan.time_window = price_band_override["time_window"]
+                query_plan.risk_notes = [
+                    *query_plan.risk_notes,
+                    *price_band_override.get("risk_notes", []),
+                ]
+        query_run: QueryRunDTO | None = None
         if generated_sql:
             generated_sql, sql_value_changes = field_value_resolver_service.rewrite_sql_field_literals(
                 sql=generated_sql,
@@ -136,6 +162,9 @@ class SqlResultAgentService:
                     sql_explanation=output_error,
                     provider=llm_plan.get("provider", "codex_cli"),
                     mode=llm_plan.get("mode", "local"),
+                    lineage_extra={
+                        "price_band_policy": price_band_policy,
+                    },
                 )
             else:
                 query_run = execute_raw_sql(
@@ -148,6 +177,7 @@ class SqlResultAgentService:
                     lineage_extra={
                         "provider": llm_plan.get("provider", "codex_cli"),
                         "mode": llm_plan.get("mode", "local"),
+                        "price_band_policy": price_band_policy,
                         "value_resolution": value_resolution_changes,
                     },
                 )
@@ -212,6 +242,7 @@ class SqlResultAgentService:
         return {
             "scene_playbook": playbook,
             "selected_preset": selected_preset,
+            "price_band_policy": self._price_band_policy(playbook=playbook, selected_preset=selected_preset, context=context),
             "generation_rules": self._generation_rules(selected_preset, context=context),
         }
 
@@ -301,7 +332,7 @@ class SqlResultAgentService:
             "metrics、dimensions 必须是 semantic_name 字符串数组；filters.field 必须是 semantic_name 字符串；不要返回对象，也不要返回字符串化 dict。",
             "涉及多值扩展表时，SKU数必须用 COUNT(DISTINCT clothing_info.Id)，避免 JOIN 放大。",
             "如果问题是商品级候选清单或明细下钻，并且 selected_preset.notes 要求返回商品ID/商品名称等明细字段，不要使用 COUNT、GROUP BY 或聚合指标；每行应代表一个候选商品。",
-            "价格带必须使用输入的 price_band_template；不要临时改桶宽。",
+            "价格带策略由 context.price_band_policy 与 scene_playbook.price_band_policy 联合控制；默认按自定义分桶处理，bucket_count 决定桶数；strategy=quantile 使用价格点分位数/NTILE（同价不拆分）；strategy=equal_width 使用最高价到最低价的等宽区间；当 price_band_policy.boundary.enabled=true 时，在 equal_width 基础上按整百/整千或用户输入的中间边界处理价格带，首尾显示“XX元以下/XX元以上”；需要固定区间时使用 boundary.custom_boundaries 表达，不另切独立固定模式。",
             "图片主色/Pantone 问题必须先按 ClothingId 取 Percent 最大且 PantoneId/RGB 非空的颜色记录，再做品牌或日期聚合。",
             "尺码候选只能作为文本抽取候选，不得输出尺码结构结论；应优先命中 SIZE TABLE、サイズ、尺码，避免把泛化的商品尺寸当结构化尺码。",
             "如果字段或关系不足以真实回答问题，不要编造 SQL；返回空 sql，并在 risk_notes 说明缺失项。",
@@ -380,6 +411,969 @@ class SqlResultAgentService:
         if not isinstance(ignored, list):
             return []
         return [str(item).strip() for item in ignored if str(item).strip()]
+
+    def _price_band_policy(
+        self,
+        *,
+        playbook: dict[str, Any] | None,
+        selected_preset: dict[str, Any] | None,
+        context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        playbook_policy = {}
+        fixed_template: list[dict[str, Any]] = []
+        context_policy: dict[str, Any] = {}
+        if isinstance(playbook, dict):
+            raw_policy = playbook.get("price_band_policy")
+            if isinstance(raw_policy, dict):
+                playbook_policy = raw_policy
+            raw_template = playbook.get("price_band_template")
+            if isinstance(raw_template, list):
+                fixed_template = [item for item in raw_template if isinstance(item, dict)]
+        if isinstance(context, dict):
+            raw_context_policy = context.get("price_band_policy")
+            if isinstance(raw_context_policy, dict):
+                context_policy = raw_context_policy
+
+        default_mode = str(playbook_policy.get("default_mode") or "").strip().lower()
+        if default_mode not in {"adaptive", "fixed"}:
+            default_mode = "adaptive"
+        if default_mode == "fixed" and not fixed_template:
+            default_mode = "adaptive"
+
+        requested_mode = ""
+        if isinstance(context, dict):
+            requested_mode = str(context.get("price_band_mode") or "").strip().lower()
+            if requested_mode not in {"adaptive", "fixed"}:
+                raw_context_policy = context.get("price_band_policy")
+                if isinstance(raw_context_policy, dict):
+                    requested_mode = str(raw_context_policy.get("mode") or "").strip().lower()
+        if requested_mode not in {"adaptive", "fixed"}:
+            requested_mode = ""
+
+        active_mode = requested_mode or default_mode
+        if selected_preset is not None and not self._is_price_band_preset(selected_preset):
+            active_mode = requested_mode or default_mode
+        if active_mode == "fixed" and not fixed_template:
+            active_mode = "adaptive"
+
+        try:
+            bucket_count = int(
+                context_policy.get("bucket_count")
+                or context_policy.get("adaptive_bucket_count")
+                or playbook_policy.get("adaptive_bucket_count")
+                or 10
+            )
+        except (TypeError, ValueError):
+            bucket_count = 10
+        bucket_count = max(2, min(bucket_count, 20))
+
+        playbook_boundary = self._price_band_boundary_policy(playbook_policy)
+        context_boundary = self._price_band_boundary_policy(context_policy, fallback=playbook_boundary)
+        strategy = str(context_policy.get("strategy") or playbook_policy.get("strategy") or "equal_width").strip().lower() or "equal_width"
+        if strategy == "rounded_width":
+            strategy = "equal_width"
+            context_boundary["enabled"] = True
+        if strategy not in {"quantile", "equal_width"}:
+            strategy = "equal_width"
+        if strategy != "equal_width":
+            context_boundary["enabled"] = False
+        context_template = [item for item in (context_policy.get("fixed_template") or []) if isinstance(item, dict)]
+        if context_template:
+            fixed_template = context_template
+        mode_options = ["adaptive"]
+
+        return {
+            "mode": active_mode,
+            "default_mode": default_mode,
+            "bucket_count": bucket_count,
+            "strategy": strategy,
+            "boundary": context_boundary,
+            "fixed_template": fixed_template,
+            "mode_options": mode_options,
+        }
+
+    def _is_price_band_preset(self, selected_preset: dict[str, Any] | None) -> bool:
+        if not isinstance(selected_preset, dict):
+            return False
+        raw_group_by = selected_preset.get("group_by")
+        raw_metrics = selected_preset.get("derived_metrics")
+        text = " ".join(
+            [
+                str(selected_preset.get("preset_key") or ""),
+                str(selected_preset.get("title") or ""),
+                str(selected_preset.get("question") or ""),
+                " ".join(str(item) for item in raw_group_by if str(item).strip()) if isinstance(raw_group_by, list) else "",
+                " ".join(str(item.get("name") or "") for item in raw_metrics if isinstance(item, dict)) if isinstance(raw_metrics, list) else "",
+            ]
+        )
+        normalized = self._normalize_text(text)
+        if "price_band" in normalized or "价格带" in text:
+            return True
+        if isinstance(raw_group_by, list) and any(self._normalize_text(item) == "价格带" for item in raw_group_by):
+            return True
+        return False
+
+    def _price_band_field_lookup(self, queryable_fields: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        lookup: dict[str, dict[str, Any]] = {}
+        for field in queryable_fields or []:
+            if not isinstance(field, dict):
+                continue
+            semantic_name = str(field.get("semantic_name") or "").strip()
+            field_name = str(field.get("field_name") or "").strip()
+            table_name = str(field.get("table_name") or "").strip()
+            if not semantic_name or not field_name or not table_name:
+                continue
+            payload = {
+                "semantic_name": semantic_name,
+                "table_name": table_name,
+                "field_name": field_name,
+                "role": str(field.get("role") or "").strip(),
+            }
+            lookup[self._normalize_text(semantic_name)] = payload
+            lookup.setdefault(self._normalize_text(field_name), payload)
+        return lookup
+
+    def _price_band_group_semantics(
+        self,
+        *,
+        selected_preset: dict[str, Any] | None,
+        query_plan: QueryPlanDTO,
+    ) -> list[str]:
+        candidates: list[str] = []
+        if isinstance(selected_preset, dict):
+            candidates.extend(self._semantic_name_list(selected_preset.get("group_by") or []))
+        candidates.extend(self._semantic_name_list(query_plan.dimensions or []))
+        result: list[str] = []
+        for item in candidates:
+            semantic_name = str(item or "").strip()
+            normalized = self._normalize_text(semantic_name)
+            if not semantic_name or normalized in {self._normalize_text("价格带"), self._normalize_text("价格"), "price"}:
+                continue
+            if semantic_name in result:
+                continue
+            result.append(semantic_name)
+        return result
+
+    def _price_band_metric_aliases(self, selected_preset: dict[str, Any] | None) -> tuple[str, str]:
+        derived_metrics = []
+        if isinstance(selected_preset, dict):
+            raw_metrics = selected_preset.get("derived_metrics")
+            if isinstance(raw_metrics, list):
+                derived_metrics = [str(item.get("name") or "").strip() for item in raw_metrics if isinstance(item, dict)]
+        count_alias = derived_metrics[0] if derived_metrics and derived_metrics[0] else "价格带SKU数"
+        share_alias = derived_metrics[1] if len(derived_metrics) > 1 and derived_metrics[1] else "价格带占比"
+        if share_alias == count_alias:
+            share_alias = "价格带占比"
+        return count_alias, share_alias
+
+    def _price_band_recent_days(self, *texts: Any) -> int | None:
+        merged = " ".join(str(text or "") for text in texts if str(text or "").strip())
+        if not merged:
+            return None
+        match = re.search(r"(?:最近|近)\s*(\d{1,3})\s*天", merged)
+        if match:
+            try:
+                return max(1, min(int(match.group(1)), 365))
+            except ValueError:
+                return 30
+        if any(token in merged for token in ("最近", "近期")):
+            return 30
+        return None
+
+    def _price_band_time_context(
+        self,
+        *,
+        selected_preset: dict[str, Any] | None,
+        query_plan: QueryPlanDTO,
+        intent: str,
+        field_lookup: dict[str, dict[str, Any]],
+        table_name: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(selected_preset, dict):
+            return None
+        time_semantic = ""
+        raw_requirements = selected_preset.get("field_requirements")
+        if isinstance(raw_requirements, list):
+            for requirement in raw_requirements:
+                if not isinstance(requirement, dict):
+                    continue
+                if str(requirement.get("role") or "").strip().lower() == "time":
+                    time_semantic = str(requirement.get("semantic_name") or "").strip()
+                    break
+        time_field = field_lookup.get(self._normalize_text(time_semantic)) if time_semantic else None
+        if time_field is None:
+            for fallback_name in ("抓取日期", "上架时间", "创建时间", "ReceiveTime", "CreateTime"):
+                time_field = field_lookup.get(self._normalize_text(fallback_name))
+                if time_field is not None:
+                    break
+        if time_field is None:
+            return None
+        if str(time_field.get("table_name") or "").strip() != str(table_name or "").strip():
+            return None
+
+        recent_days = self._price_band_recent_days(
+            intent,
+            query_plan.time_window,
+            selected_preset.get("question") if isinstance(selected_preset, dict) else "",
+            " ".join(str(item) for item in (selected_preset.get("notes") or []) if str(item).strip()) if isinstance(selected_preset, dict) else "",
+        )
+        if recent_days is None:
+            return None
+
+        field_name = str(time_field.get("field_name") or "").strip()
+        if not field_name:
+            return None
+        return {
+            "table_name": str(time_field.get("table_name") or table_name).strip(),
+            "field_name": field_name,
+            "semantic_name": str(time_field.get("semantic_name") or field_name).strip(),
+            "days": recent_days,
+            "time_window": f"最近{recent_days}天（按数据最大{str(time_field.get('semantic_name') or field_name).strip()}锚定）",
+        }
+
+    def _price_band_effective_filters(
+        self,
+        filters: list[dict[str, Any]],
+        field_disambiguation_context: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        confirmed_map: dict[str, dict[str, Any]] = {}
+        if isinstance(field_disambiguation_context, dict):
+            confirmed_resolutions = field_disambiguation_context.get("confirmed_resolutions")
+            if isinstance(confirmed_resolutions, list):
+                for item in confirmed_resolutions:
+                    if not isinstance(item, dict):
+                        continue
+                    semantic_name = str(item.get("semantic_name") or "").strip()
+                    canonical_value = str(item.get("canonical_value") or "").strip()
+                    if not semantic_name or not canonical_value:
+                        continue
+                    confirmed_map[self._normalize_text(semantic_name)] = {
+                        "field": semantic_name,
+                        "operator": "=",
+                        "value": canonical_value,
+                    }
+
+        effective_filters: list[dict[str, Any]] = []
+        for condition in filters or []:
+            if not isinstance(condition, dict):
+                continue
+            semantic_name = str(condition.get("field") or condition.get("semantic_name") or "").strip()
+            normalized = self._normalize_text(semantic_name)
+            if normalized and normalized in confirmed_map:
+                effective_filters.append(dict(confirmed_map[normalized]))
+                confirmed_map.pop(normalized, None)
+                continue
+            effective_filters.append(dict(condition))
+
+        effective_filters.extend(confirmed_map.values())
+        return effective_filters
+
+    def _price_band_sql_literal(self, value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            text = f"{value:.8f}".rstrip("0").rstrip(".")
+            return text or "0"
+        text = str(value).replace("'", "''")
+        return f"'{text}'"
+
+    def _price_band_coerce_number(self, value: Any) -> Any:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value
+        text = str(value or "").strip()
+        if not text:
+            return value
+        if re.fullmatch(r"-?\d+", text):
+            try:
+                return int(text)
+            except ValueError:
+                return value
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+            try:
+                return float(text)
+            except ValueError:
+                return value
+        return value
+
+    def _price_band_bool(self, value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        text = str(value).strip().lower()
+        if not text:
+            return default
+        if text in {"1", "true", "yes", "y", "on", "开启", "启用", "是"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "关闭", "禁用", "否"}:
+            return False
+        return default
+
+    def _price_band_rounding(self, value: Any, default: str = "auto") -> str:
+        text = str(value or "").strip().lower()
+        mapping = {
+            "100": "hundred",
+            "hundred": "hundred",
+            "整百": "hundred",
+            "百": "hundred",
+            "1000": "thousand",
+            "thousand": "thousand",
+            "整千": "thousand",
+            "千": "thousand",
+            "auto": "auto",
+            "自动": "auto",
+        }
+        return mapping.get(text, default if default in {"auto", "hundred", "thousand"} else "auto")
+
+    def _price_band_custom_boundaries(self, value: Any) -> list[float]:
+        raw_values: list[Any]
+        if isinstance(value, list):
+            raw_values = value
+        else:
+            text = str(value or "").strip()
+            raw_values = re.split(r"[,，、\s]+", text) if text else []
+        boundaries: list[float] = []
+        for item in raw_values:
+            number = self._price_band_coerce_number(item)
+            if isinstance(number, bool) or not isinstance(number, (int, float)):
+                continue
+            boundaries.append(float(number))
+        return sorted(set(boundaries))
+
+    def _price_band_boundary_policy(
+        self,
+        raw_policy: dict[str, Any] | None,
+        *,
+        fallback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        fallback_policy = fallback or {}
+        policy = raw_policy or {}
+        boundary = policy.get("boundary") if isinstance(policy.get("boundary"), dict) else {}
+        legacy_rounded = str(policy.get("strategy") or "").strip().lower() == "rounded_width"
+        enabled_value = boundary.get("enabled", policy.get("boundary_enabled", None))
+        rounding_value = boundary.get(
+            "rounding",
+            policy.get("boundary_rounding", policy.get("rounding", None)),
+        )
+        custom_value = boundary.get(
+            "custom_boundaries",
+            policy.get("custom_boundaries", policy.get("boundary_values", policy.get("boundaries", None))),
+        )
+        return {
+            "enabled": self._price_band_bool(
+                enabled_value,
+                default=bool(fallback_policy.get("enabled", False)) or legacy_rounded,
+            ),
+            "rounding": self._price_band_rounding(
+                rounding_value,
+                default=str(fallback_policy.get("rounding") or "auto"),
+            ),
+            "open_ended": self._price_band_bool(
+                boundary.get("open_ended", policy.get("open_ended", None)),
+                default=self._price_band_bool(fallback_policy.get("open_ended", True), default=True),
+            ),
+            "custom_boundaries": self._price_band_custom_boundaries(
+                custom_value if custom_value is not None else fallback_policy.get("custom_boundaries", [])
+            ),
+        }
+
+    def _price_band_boundary_label(self, value: float) -> str:
+        if float(value).is_integer():
+            return str(int(value))
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    def _price_band_filter_clauses(
+        self,
+        *,
+        filters: list[dict[str, Any]],
+        field_lookup: dict[str, dict[str, Any]],
+        base_table_name: str,
+        base_alias: str,
+        managed_time_context: dict[str, Any] | None = None,
+    ) -> tuple[list[str], bool]:
+        clauses: list[str] = []
+        unsupported = False
+        managed_time_table = str(managed_time_context.get("table_name") or "").strip() if managed_time_context else ""
+        managed_time_field = str(managed_time_context.get("field_name") or "").strip() if managed_time_context else ""
+        for condition in filters or []:
+            if not isinstance(condition, dict):
+                continue
+            semantic_name = str(condition.get("field") or condition.get("semantic_name") or "").strip()
+            if not semantic_name:
+                continue
+            field = field_lookup.get(self._normalize_text(semantic_name))
+            if not field:
+                continue
+            field_table = str(field.get("table_name") or "").strip()
+            field_name = str(field.get("field_name") or "").strip()
+            if not field_table or not field_name:
+                continue
+            if managed_time_table and managed_time_field and field_table == managed_time_table and field_name == managed_time_field:
+                continue
+            operator = str(condition.get("operator") or "=").strip().lower()
+            raw_value = condition.get("value")
+            if raw_value is None:
+                continue
+            if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "null", "none", "未指定", "无"}:
+                continue
+            target_expr = f"{base_alias}.`{field_name}`"
+            if field_table == base_table_name:
+                if operator == "in" and isinstance(raw_value, list):
+                    items: list[str] = []
+                    for item in raw_value:
+                        if str(item or "").strip() == "":
+                            continue
+                        resolved = field_value_resolver_service.canonicalize_value_for_field(
+                            table_name=field_table,
+                            field_name=field_name,
+                            semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                            raw_value=self._price_band_coerce_number(item),
+                        )
+                        items.append(self._price_band_sql_literal(resolved))
+                    if items:
+                        clauses.append(f"{target_expr} IN ({', '.join(items)})")
+                elif operator == "like" and isinstance(raw_value, str):
+                    text = raw_value.strip()
+                    prefix = "%" if text.startswith("%") else ""
+                    suffix = "%" if text.endswith("%") and len(text) > len(prefix) else ""
+                    core = text[len(prefix) :]
+                    if suffix:
+                        core = core[:-1]
+                    resolved = field_value_resolver_service.canonicalize_value_for_field(
+                        table_name=field_table,
+                        field_name=field_name,
+                        semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                        raw_value=core,
+                    )
+                    clauses.append(f"{target_expr} LIKE {self._price_band_sql_literal(f'{prefix}{resolved}{suffix}')}")
+                elif operator in {"=", "=="}:
+                    resolved = field_value_resolver_service.canonicalize_value_for_field(
+                        table_name=field_table,
+                        field_name=field_name,
+                        semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                        raw_value=self._price_band_coerce_number(raw_value),
+                    )
+                    clauses.append(f"{target_expr} = {self._price_band_sql_literal(resolved)}")
+                elif operator in {">", ">=", "<", "<="}:
+                    clauses.append(
+                        f"{target_expr} {operator} {self._price_band_sql_literal(self._price_band_coerce_number(raw_value))}"
+                    )
+                elif operator == "between" and isinstance(raw_value, list) and len(raw_value) == 2:
+                    left = self._price_band_sql_literal(self._price_band_coerce_number(raw_value[0]))
+                    right = self._price_band_sql_literal(self._price_band_coerce_number(raw_value[1]))
+                    clauses.append(f"{target_expr} BETWEEN {left} AND {right}")
+            elif field_table == "clothing_scene_info" and base_table_name == "clothing_info":
+                scene_expr = f"s.`{field_name}`"
+                predicate = ""
+                if operator == "in" and isinstance(raw_value, list):
+                    items = []
+                    for item in raw_value:
+                        if str(item or "").strip() == "":
+                            continue
+                        resolved = field_value_resolver_service.canonicalize_value_for_field(
+                            table_name=field_table,
+                            field_name=field_name,
+                            semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                            raw_value=self._price_band_coerce_number(item),
+                        )
+                        items.append(self._price_band_sql_literal(resolved))
+                    if items:
+                        predicate = f"{scene_expr} IN ({', '.join(items)})"
+                elif operator == "like" and isinstance(raw_value, str):
+                    text = raw_value.strip()
+                    prefix = "%" if text.startswith("%") else ""
+                    suffix = "%" if text.endswith("%") and len(text) > len(prefix) else ""
+                    core = text[len(prefix) :]
+                    if suffix:
+                        core = core[:-1]
+                    resolved = field_value_resolver_service.canonicalize_value_for_field(
+                        table_name=field_table,
+                        field_name=field_name,
+                        semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                        raw_value=core,
+                    )
+                    predicate = f"{scene_expr} LIKE {self._price_band_sql_literal(f'{prefix}{resolved}{suffix}')}"
+                elif operator in {"=", "=="}:
+                    resolved = field_value_resolver_service.canonicalize_value_for_field(
+                        table_name=field_table,
+                        field_name=field_name,
+                        semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                        raw_value=self._price_band_coerce_number(raw_value),
+                    )
+                    predicate = f"{scene_expr} = {self._price_band_sql_literal(resolved)}"
+                elif operator in {">", ">=", "<", "<="}:
+                    predicate = f"{scene_expr} {operator} {self._price_band_sql_literal(self._price_band_coerce_number(raw_value))}"
+                elif operator == "between" and isinstance(raw_value, list) and len(raw_value) == 2:
+                    left = self._price_band_sql_literal(self._price_band_coerce_number(raw_value[0]))
+                    right = self._price_band_sql_literal(self._price_band_coerce_number(raw_value[1]))
+                    predicate = f"{scene_expr} BETWEEN {left} AND {right}"
+                if predicate:
+                    clauses.append(
+                        f"EXISTS (SELECT 1 FROM `clothing_scene_info` s WHERE s.`ClothingId` = {base_alias}.`Id` AND {predicate})"
+                    )
+            else:
+                unsupported = True
+        return clauses, unsupported
+
+    def _price_band_fixed_band_sql(self, field_name: str, template: list[dict[str, Any]]) -> tuple[str, str]:
+        cases: list[str] = []
+        order_cases: list[str] = []
+        for index, item in enumerate(template):
+            if not isinstance(item, dict):
+                continue
+            band_label = str(item.get("band") or "").strip()
+            if not band_label:
+                continue
+            min_value = item.get("min")
+            max_value = item.get("max")
+            min_sql = self._price_band_sql_literal(self._price_band_coerce_number(min_value))
+            if max_value is None:
+                cases.append(f"WHEN ci.`{field_name}` >= {min_sql} THEN {self._price_band_sql_literal(band_label)}")
+                order_cases.append(f"WHEN ci.`{field_name}` >= {min_sql} THEN {index + 1}")
+                continue
+            max_sql = self._price_band_sql_literal(self._price_band_coerce_number(max_value))
+            cases.append(
+                f"WHEN ci.`{field_name}` BETWEEN {min_sql} AND {max_sql} THEN {self._price_band_sql_literal(band_label)}"
+            )
+            order_cases.append(
+                f"WHEN ci.`{field_name}` BETWEEN {min_sql} AND {max_sql} THEN {index + 1}"
+            )
+        band_case = "CASE " + " ".join(cases) + " ELSE NULL END"
+        order_case = "CASE " + " ".join(order_cases) + " ELSE NULL END"
+        return band_case, order_case
+
+    def _price_band_sort_clause(
+        self,
+        *,
+        selected_preset: dict[str, Any] | None,
+        group_semantics: list[str],
+        count_alias: str,
+        share_alias: str,
+    ) -> str:
+        if isinstance(selected_preset, dict):
+            raw_sort = selected_preset.get("sort")
+            if isinstance(raw_sort, list) and raw_sort:
+                parts: list[str] = []
+                for item in raw_sort:
+                    if not isinstance(item, dict):
+                        continue
+                    metric = str(item.get("metric") or "").strip()
+                    direction = str(item.get("direction") or "ASC").strip().upper()
+                    if direction not in {"ASC", "DESC"}:
+                        direction = "ASC"
+                    normalized = self._normalize_text(metric)
+                    if not metric:
+                        continue
+                    if metric in group_semantics:
+                        parts.append(f"`{metric}` {direction}")
+                    elif normalized == "价格带":
+                        parts.append(f"band_order {direction}")
+                    elif metric in {count_alias, "SKU数", "价格带SKU数"}:
+                        parts.append(f"`{count_alias}` {direction}")
+                    elif metric in {share_alias, "价格带占比", "品牌内价格带占比", "价格带内占比"} or "占比" in metric:
+                        parts.append(f"`{share_alias}` {direction}")
+                if parts:
+                    return ", ".join(parts)
+        default_parts = [f"`{item}` ASC" for item in group_semantics]
+        default_parts.append("band_order ASC")
+        return ", ".join(default_parts)
+
+    def _build_price_band_sql(
+        self,
+        *,
+        scene: SceneDTO,
+        query_plan: QueryPlanDTO,
+        selected_preset: dict[str, Any] | None,
+        price_band_policy: dict[str, Any] | None,
+        field_disambiguation_context: dict[str, Any] | None,
+        intent: str,
+        queryable_fields: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not self._is_price_band_preset(selected_preset):
+            return None
+        field_lookup = self._price_band_field_lookup(queryable_fields)
+        price_field = field_lookup.get(self._normalize_text("价格")) or field_lookup.get(self._normalize_text("Price"))
+        id_field = field_lookup.get(self._normalize_text("商品ID")) or field_lookup.get(self._normalize_text("Id"))
+        if not price_field or not id_field:
+            return None
+
+        table_name = str(price_field.get("table_name") or "").strip()
+        if not table_name:
+            return None
+
+        group_semantics = self._price_band_group_semantics(selected_preset=selected_preset, query_plan=query_plan)
+        group_fields: list[dict[str, Any]] = []
+        for semantic_name in group_semantics:
+            field = field_lookup.get(self._normalize_text(semantic_name))
+            if not field:
+                continue
+            if str(field.get("table_name") or "").strip() != table_name:
+                return None
+            group_fields.append(field)
+
+        policy = dict(price_band_policy or {})
+        mode = str(policy.get("mode") or policy.get("default_mode") or "adaptive").strip().lower()
+        if mode not in {"adaptive", "fixed"}:
+            mode = "adaptive"
+        try:
+            bucket_count = int(policy.get("bucket_count") or policy.get("adaptive_bucket_count") or 10)
+        except (TypeError, ValueError):
+            bucket_count = 10
+        bucket_count = max(2, min(bucket_count, 20))
+        boundary_policy = self._price_band_boundary_policy(policy)
+        strategy = str(policy.get("strategy") or "equal_width").strip().lower() or "equal_width"
+        if strategy == "rounded_width":
+            strategy = "equal_width"
+            boundary_policy["enabled"] = True
+        if strategy not in {"quantile", "equal_width"}:
+            strategy = "equal_width"
+        if strategy != "equal_width":
+            boundary_policy["enabled"] = False
+        fixed_template = [item for item in (policy.get("fixed_template") or policy.get("price_band_template") or []) if isinstance(item, dict)]
+        if mode == "fixed" and not fixed_template:
+            mode = "adaptive"
+
+        count_alias, share_alias = self._price_band_metric_aliases(selected_preset)
+        time_context = self._price_band_time_context(
+            selected_preset=selected_preset,
+            query_plan=query_plan,
+            intent=intent,
+            field_lookup=field_lookup,
+            table_name=table_name,
+        )
+        effective_filters = self._price_band_effective_filters(
+            filters=list(query_plan.filters or []),
+            field_disambiguation_context=field_disambiguation_context,
+        )
+        filter_clauses, unsupported_filters = self._price_band_filter_clauses(
+            filters=effective_filters,
+            field_lookup=field_lookup,
+            base_table_name=table_name,
+            base_alias="ci",
+            managed_time_context=time_context,
+        )
+        if unsupported_filters:
+            return None
+
+        base_conditions = [f"ci.`{price_field['field_name']}` IS NOT NULL", *filter_clauses]
+        if time_context is not None:
+            base_conditions.append(
+                f"ci.`{time_context['field_name']}` >= DATE_SUB(a.anchor_date, INTERVAL {time_context['days']} DAY)"
+            )
+            base_conditions.append(
+                f"ci.`{time_context['field_name']}` < DATE_ADD(a.anchor_date, INTERVAL 1 DAY)"
+            )
+
+        base_select_parts = [
+            f"ci.`{id_field['field_name']}` AS `sku_id`",
+            *[f"ci.`{field['field_name']}` AS `{field['semantic_name']}`" for field in group_fields],
+            f"ci.`{price_field['field_name']}` AS `price`",
+        ]
+
+        order_clause = self._price_band_sort_clause(
+            selected_preset=selected_preset,
+            group_semantics=[field["semantic_name"] for field in group_fields],
+            count_alias=count_alias,
+            share_alias=share_alias,
+        )
+
+        ctes: list[str] = []
+        if time_context is not None:
+            ctes.append(
+                f"anchor AS (SELECT MAX(DATE(`{time_context['field_name']}`)) AS anchor_date FROM `{table_name}`)"
+            )
+
+        if mode == "fixed":
+            band_case, band_order_case = self._price_band_fixed_band_sql(price_field["field_name"], fixed_template)
+            base_select_parts.extend(
+                [
+                    f"{band_case} AS `price_band`",
+                    f"{band_order_case} AS `band_order`",
+                ]
+            )
+            base_from = f"FROM `{table_name}` ci"
+            if time_context is not None:
+                base_from += " JOIN anchor a"
+            base_sql = f"base AS (SELECT {', '.join(base_select_parts)} {base_from} WHERE {' AND '.join(base_conditions)})"
+            ctes.append(base_sql)
+            group_aliases = [f"`{field['semantic_name']}`" for field in group_fields]
+            group_group_by = ", ".join(group_aliases)
+            band_group_select = ", ".join(group_aliases + ["`price_band`", "`band_order`"]) if group_aliases else "`price_band`, `band_order`"
+            band_group_by = band_group_select
+            ctes.append(
+                f"band_counts AS (SELECT {band_group_select}, COUNT(DISTINCT sku_id) AS `{count_alias}` "
+                f"FROM base WHERE `price_band` IS NOT NULL "
+                f"GROUP BY {band_group_by})"
+            )
+            partition_by = f"PARTITION BY {group_group_by}" if group_group_by else ""
+            final_select = [
+                *group_aliases,
+                "`price_band` AS `价格带`",
+                f"`{count_alias}` AS `{count_alias}`",
+                (
+                    f"`{count_alias}` / NULLIF(SUM(`{count_alias}`) OVER ({partition_by}), 0) AS `{share_alias}`"
+                    if partition_by
+                    else f"`{count_alias}` / NULLIF(SUM(`{count_alias}`) OVER (), 0) AS `{share_alias}`"
+                ),
+            ]
+            sql = (
+                f"WITH {', '.join(ctes)} "
+                f"SELECT {', '.join(final_select)} FROM band_counts "
+                f"ORDER BY {order_clause}"
+            )
+            query_time_window = str(query_plan.time_window).strip() if query_plan.time_window is not None else ""
+            time_window = time_context["time_window"] if time_context is not None else (query_time_window or None)
+            return {
+                "sql": sql,
+                "sql_explanation": (
+                    "价格带策略=固定模板（"
+                    f"{', '.join(str(item.get('band') or '').strip() for item in fixed_template if str(item.get('band') or '').strip()) or '未配置'}"
+                    "）；按 "
+                    f"{', '.join(field['semantic_name'] for field in group_fields) or '价格带'} 分组生成 SQL。"
+                ),
+                "metrics": [count_alias, share_alias],
+                "dimensions": [field["semantic_name"] for field in group_fields] + ["价格带"],
+                "time_window": time_window,
+                "risk_notes": [
+                    f"价格带模式：fixed",
+                    f"固定模板：{', '.join(str(item.get('band') or '').strip() for item in fixed_template if str(item.get('band') or '').strip())}",
+                ],
+            }
+
+        group_aliases = [f"`{field['semantic_name']}`" for field in group_fields]
+        group_group_by = ", ".join(group_aliases)
+        band_group_select = ", ".join(group_aliases + ["`band_order`"]) if group_aliases else "`band_order`"
+        band_group_by = band_group_select
+        base_from = f"FROM `{table_name}` ci"
+        if time_context is not None:
+            base_from += " JOIN anchor a"
+        boundary_kind = "none"
+        custom_boundaries = boundary_policy["custom_boundaries"] if boundary_policy.get("enabled") else []
+        if strategy == "equal_width":
+            base_sql = f"base AS (SELECT {', '.join(base_select_parts)} {base_from} WHERE {' AND '.join(base_conditions)})"
+            ctes.append(base_sql)
+            if custom_boundaries:
+                boundary_kind = "manual"
+                bucket_count = len(custom_boundaries) + 1
+                if len(custom_boundaries) == 1:
+                    band_order_cases = [
+                        f"WHEN price < {self._price_band_sql_literal(custom_boundaries[0])} THEN 1"
+                    ]
+                else:
+                    band_order_cases = [
+                        f"WHEN price <= {self._price_band_sql_literal(custom_boundaries[0])} THEN 1"
+                    ]
+                    for index, boundary_value in enumerate(custom_boundaries[1:], start=2):
+                        operator = "<" if index == len(custom_boundaries) else "<="
+                        band_order_cases.append(
+                            f"WHEN price {operator} {self._price_band_sql_literal(boundary_value)} THEN {index}"
+                        )
+                band_order_cases.append(f"ELSE {bucket_count}")
+                band_order_expr = "CASE " + " ".join(band_order_cases) + " END"
+                ctes.append(f"bucketed AS (SELECT base.*, {band_order_expr} AS `band_order` FROM base)")
+                band_range_select = "MIN(price) AS band_min, MAX(price) AS band_max"
+            else:
+                window_over = f"OVER (PARTITION BY {group_group_by})" if group_group_by else "OVER ()"
+                ctes.append(
+                    "priced AS (SELECT base.*, "
+                    f"MIN(price) {window_over} AS group_min_price, "
+                    f"MAX(price) {window_over} AS group_max_price FROM base)"
+                )
+            if boundary_policy.get("enabled") and not custom_boundaries:
+                boundary_kind = "rounded"
+                raw_step_expr = f"((group_max_price - group_min_price) / {bucket_count})"
+                rounding = str(boundary_policy.get("rounding") or "auto")
+                if rounding == "thousand":
+                    band_step_expr = (
+                        "CASE WHEN group_max_price <= group_min_price THEN 1000 "
+                        f"ELSE GREATEST(1000, CEIL({raw_step_expr} / 1000) * 1000) END"
+                    )
+                elif rounding == "hundred":
+                    band_step_expr = (
+                        "CASE WHEN group_max_price <= group_min_price THEN 100 "
+                        f"ELSE GREATEST(100, CEIL({raw_step_expr} / 100) * 100) END"
+                    )
+                else:
+                    band_step_expr = (
+                        "CASE WHEN group_max_price <= group_min_price THEN CASE WHEN group_min_price >= 10000 THEN 1000 ELSE 100 END "
+                        f"WHEN {raw_step_expr} >= 1000 THEN CEIL({raw_step_expr} / 1000) * 1000 "
+                        f"ELSE GREATEST(100, CEIL({raw_step_expr} / 100) * 100) END"
+                    )
+                ctes.append(f"priced_step AS (SELECT priced.*, {band_step_expr} AS band_step FROM priced)")
+                ctes.append(
+                    "priced_bounds AS (SELECT priced_step.*, "
+                    "FLOOR(group_min_price / NULLIF(band_step, 0)) * band_step AS band_floor "
+                    "FROM priced_step)"
+                )
+                first_boundary = "(band_floor + band_step)"
+                last_boundary = f"(band_floor + (band_step * ({bucket_count} - 1)))"
+                band_order_expr = (
+                    "CASE WHEN group_max_price <= group_min_price THEN 1 "
+                    f"WHEN price <= {first_boundary} THEN 1 "
+                    f"WHEN price >= {last_boundary} THEN {bucket_count} "
+                    f"ELSE CEIL((price - {first_boundary}) / NULLIF(band_step, 0)) + 1 END"
+                )
+                ctes.append(f"bucketed AS (SELECT priced_bounds.*, {band_order_expr} AS `band_order` FROM priced_bounds)")
+                band_range_select = (
+                    "MIN(price) AS band_min, MAX(price) AS band_max, "
+                    "MIN(group_min_price) AS group_min_price, MAX(group_max_price) AS group_max_price, "
+                    "MIN(band_step) AS band_step, MIN(band_floor) AS band_floor"
+                )
+            elif not custom_boundaries:
+                band_order_expr = (
+                    "CASE WHEN group_max_price <= group_min_price THEN 1 "
+                    f"ELSE LEAST({bucket_count}, FLOOR((price - group_min_price) / "
+                    f"NULLIF((group_max_price - group_min_price) / {bucket_count}, 0)) + 1) END"
+                )
+                ctes.append(f"bucketed AS (SELECT priced.*, {band_order_expr} AS `band_order` FROM priced)")
+                band_range_select = (
+                    "MIN(price) AS band_min, MAX(price) AS band_max, "
+                    "MIN(group_min_price) AS group_min_price, MAX(group_max_price) AS group_max_price"
+                )
+            band_source = "bucketed"
+        else:
+            partition_clause = ""
+            if group_fields:
+                partition_clause = "PARTITION BY " + ", ".join(f"`{field['semantic_name']}`" for field in group_fields)
+            band_order_expr = (
+                f"NTILE({bucket_count}) OVER ({partition_clause} ORDER BY price)"
+                if partition_clause
+                else f"NTILE({bucket_count}) OVER (ORDER BY price)"
+            )
+            base_sql = f"base AS (SELECT {', '.join(base_select_parts)} {base_from} WHERE {' AND '.join(base_conditions)})"
+            ctes.append(base_sql)
+            price_point_group_select = ", ".join(group_aliases + ["price"]) if group_aliases else "price"
+            ctes.append(
+                f"price_points AS (SELECT {price_point_group_select}, COUNT(DISTINCT sku_id) AS price_sku_cnt "
+                f"FROM base GROUP BY {price_point_group_select})"
+            )
+            ctes.append(
+                f"price_ranked AS (SELECT price_points.*, {band_order_expr} AS `band_order` FROM price_points)"
+            )
+            band_source = "price_ranked"
+            band_range_select = "MIN(price) AS band_min, MAX(price) AS band_max"
+        band_count_expr = "SUM(price_sku_cnt)" if strategy == "quantile" else "COUNT(DISTINCT sku_id)"
+        if boundary_kind == "manual":
+            label_cases = [
+                f"WHEN `band_order` = 1 THEN {self._price_band_sql_literal(f'{self._price_band_boundary_label(custom_boundaries[0])}元以下')}"
+            ]
+            for index, boundary_value in enumerate(custom_boundaries[1:], start=2):
+                previous = custom_boundaries[index - 2]
+                label_cases.append(
+                    f"WHEN `band_order` = {index} THEN "
+                    f"{self._price_band_sql_literal(f'{self._price_band_boundary_label(previous)}-{self._price_band_boundary_label(boundary_value)}元')}"
+                )
+            label_cases.append(
+                f"WHEN `band_order` = {bucket_count} THEN "
+                f"{self._price_band_sql_literal(f'{self._price_band_boundary_label(custom_boundaries[-1])}元以上')}"
+            )
+            price_band_label = "CASE " + " ".join(label_cases) + " ELSE NULL END"
+        elif boundary_kind == "rounded":
+            price_band_label = (
+                "CASE WHEN `band_order` = 1 THEN CONCAT(CAST(ROUND(band_floor + band_step, 0) AS CHAR), '元以下') "
+                f"WHEN `band_order` = {bucket_count} THEN CONCAT(CAST(ROUND(band_floor + (band_step * ({bucket_count} - 1)), 0) AS CHAR), '元以上') "
+                "ELSE CONCAT("
+                "CAST(ROUND(band_floor + ((`band_order` - 1) * band_step), 0) AS CHAR), "
+                "'-', "
+                "CAST(ROUND(band_floor + (`band_order` * band_step), 0) AS CHAR), "
+                "'元'"
+                ") END"
+            )
+        elif strategy == "equal_width":
+            price_band_label = (
+                "CASE WHEN group_min_price = group_max_price THEN CAST(ROUND(group_min_price, 2) AS CHAR) "
+                "ELSE CONCAT("
+                f"CAST(ROUND(group_min_price + ((`band_order` - 1) * ((group_max_price - group_min_price) / {bucket_count})), 2) AS CHAR), "
+                "'-', "
+                f"CAST(ROUND(CASE WHEN `band_order` = {bucket_count} THEN group_max_price "
+                f"ELSE group_min_price + (`band_order` * ((group_max_price - group_min_price) / {bucket_count})) END, 2) AS CHAR)"
+                ") END"
+            )
+        else:
+            price_band_label = (
+                "CASE WHEN band_min = band_max THEN CAST(ROUND(band_min, 2) AS CHAR) "
+                "ELSE CONCAT(CAST(ROUND(band_min, 2) AS CHAR), '-', CAST(ROUND(band_max, 2) AS CHAR)) END"
+            )
+        ctes.append(
+            f"band_counts AS (SELECT {band_group_select}, {band_range_select}, "
+            f"{band_count_expr} AS `{count_alias}` FROM {band_source} GROUP BY {band_group_by})"
+        )
+        labeled_select = [
+            *group_aliases,
+            "`band_order`",
+            f"{price_band_label} AS `price_band`",
+            f"`{count_alias}`",
+        ]
+        ctes.append(f"band_labeled AS (SELECT {', '.join(labeled_select)} FROM band_counts)")
+        rollup_select = [
+            *group_aliases,
+            "`price_band`",
+            "MIN(`band_order`) AS `band_order`",
+            f"SUM(`{count_alias}`) AS `{count_alias}`",
+        ]
+        rollup_group_by = ", ".join([*group_aliases, "`price_band`"]) if group_aliases else "`price_band`"
+        ctes.append(
+            f"band_rollup AS (SELECT {', '.join(rollup_select)} FROM band_labeled GROUP BY {rollup_group_by})"
+        )
+        partition_by = f"PARTITION BY {group_group_by}" if group_group_by else ""
+        final_select = [
+            *group_aliases,
+            "`price_band` AS `价格带`",
+            f"`{count_alias}` AS `{count_alias}`",
+            (
+                f"`{count_alias}` / NULLIF(SUM(`{count_alias}`) OVER ({partition_by}), 0) AS `{share_alias}`"
+                if partition_by
+                else f"`{count_alias}` / NULLIF(SUM(`{count_alias}`) OVER (), 0) AS `{share_alias}`"
+            ),
+        ]
+        sql = (
+            f"WITH {', '.join(ctes)} "
+            f"SELECT {', '.join(final_select)} FROM band_rollup "
+            f"ORDER BY {order_clause}"
+        )
+        query_time_window = str(query_plan.time_window).strip() if query_plan.time_window is not None else ""
+        time_window = time_context["time_window"] if time_context is not None else (query_time_window or None)
+        if strategy == "equal_width":
+            strategy_note = "等宽区间，按每组最低价到最高价均分价格范围，区间宽度一致但SKU数可能不均"
+            if boundary_kind == "rounded":
+                rounding_label = {"auto": "自动", "hundred": "整百", "thousand": "整千"}.get(
+                    str(boundary_policy.get("rounding") or "auto"),
+                    "自动",
+                )
+                strategy_note += f"；边界处理=取整（{rounding_label}），首桶为XX元以下，尾桶为XX元以上"
+            elif boundary_kind == "manual":
+                boundary_text = ", ".join(self._price_band_boundary_label(value) for value in custom_boundaries)
+                strategy_note += f"；边界处理=手动边界（{boundary_text}），首桶为XX元以下，尾桶为XX元以上"
+        else:
+            strategy_note = "价格点分位数/NTILE，按不同价格点排序分桶，同价SKU不会拆到不同桶；价格跨度和SKU数可能不同"
+        return {
+            "sql": sql,
+            "sql_explanation": (
+                f"价格带策略=自适应分桶（{bucket_count}桶 / {strategy_note}）；按 "
+                f"{', '.join(field['semantic_name'] for field in group_fields) or '价格带'} 分组生成 SQL。"
+            ),
+            "metrics": [count_alias, share_alias],
+            "dimensions": [field["semantic_name"] for field in group_fields] + ["价格带"],
+            "time_window": time_window,
+            "risk_notes": [
+                "价格带模式：adaptive",
+                f"自适应桶数：{bucket_count}",
+                f"自适应策略：{strategy_note}",
+                (
+                    f"边界处理：{boundary_kind}"
+                    if boundary_kind != "none"
+                    else "边界处理：关闭"
+                ),
+            ],
+        }
 
     def _queryable_semantic_fields(self, scene: SceneDTO) -> list[dict]:
         rows = semantic_field_cache_service.get_queryable_scene_fields(scene.scene_id)
@@ -536,7 +1530,17 @@ class SqlResultAgentService:
         sql_explanation: str,
         provider: object,
         mode: object,
+        lineage_extra: dict[str, Any] | None = None,
     ) -> QueryRunDTO:
+        lineage = {
+            "scene_id": scene.scene_id,
+            "scene_version": scene_version,
+            "execution_mode": "mysql_raw",
+            "provider": str(provider or ""),
+            "mode": str(mode or ""),
+        }
+        if isinstance(lineage_extra, dict):
+            lineage.update(lineage_extra)
         return QueryRunDTO(
             query_id=f"query_{uuid4().hex[:10]}",
             session_id=session_id,
@@ -550,13 +1554,7 @@ class SqlResultAgentService:
             insight_summary=[sql_explanation],
             chart_suggestion="table",
             safety_checks=[{"type": "llm_sql_contract", "passed": False}],
-            lineage={
-                "scene_id": scene.scene_id,
-                "scene_version": scene_version,
-                "execution_mode": "mysql_raw",
-                "provider": str(provider or ""),
-                "mode": str(mode or ""),
-            },
+            lineage=lineage,
         )
 
 

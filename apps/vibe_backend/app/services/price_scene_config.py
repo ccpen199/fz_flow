@@ -7,7 +7,7 @@ PRICE_SCENE_DESCRIPTION = "围绕品牌、品类、来源站点和场景标签�
 PRICE_SCENE_SAMPLE_GOALS = [
     "各品牌的SKU数、平均价、最低价、最高价和价格跨度是多少，按价格跨度降序返回前20",
     "各一级类目和二级类目的SKU数、平均价和价格跨度是多少，按SKU数降序返回前30",
-    "按品牌统计0-99、100-199、200-399、400-799、800+价格带分布和占比",
+    "按品牌统计价格带分布和占比，默认自定义分桶，可设置桶数、策略和边界",
     "最近抓取批次中各品牌平均价最高的是哪些，返回品牌、SKU数、平均价、最高价",
     "各来源站点域名的品牌覆盖、SKU数和平均价差异是什么",
     "各品牌在不同场景标签下的平均价差异是多少",
@@ -128,7 +128,7 @@ PRICE_SCENE_METRIC_TEMPLATES = [
     {
         "name": "价格带占比",
         "formula": "COUNT(*) / SUM(COUNT(*)) OVER()",
-        "description": "按固定价格带分桶后的占比。",
+        "description": "按当前价格带策略分桶后的占比。",
     },
     {
         "name": "品牌覆盖数",
@@ -144,6 +144,18 @@ PRICE_SCENE_PRICE_BANDS = [
     {"band": "400-799", "min": 400, "max": 799},
     {"band": "800+", "min": 800, "max": None},
 ]
+
+PRICE_SCENE_PRICE_BAND_POLICY = {
+    "default_mode": "adaptive",
+    "adaptive_bucket_count": 10,
+    "strategy": "equal_width",
+    "boundary": {
+        "enabled": True,
+        "rounding": "auto",
+        "open_ended": True,
+        "custom_boundaries": [],
+    },
+}
 
 PRICE_SCENE_QUESTION_MATRIX = [
     {
@@ -241,7 +253,7 @@ PRICE_SCENE_QUESTION_MATRIX = [
     {
         "preset_key": "brand_price_band_distribution",
         "title": "品牌价格带分布",
-        "question": "按品牌统计0-99、100-199、200-399、400-799、800+价格带分布和占比",
+        "question": "按品牌统计价格带分布和占比，默认自定义分桶，可设置桶数、策略和边界",
         "editable": True,
         "field_requirements": [
             {
@@ -276,7 +288,7 @@ PRICE_SCENE_QUESTION_MATRIX = [
         "group_by": ["品牌", "价格带"],
         "sort": [{"metric": "品牌", "direction": "ASC"}],
         "limit": None,
-        "notes": ["价格带口径固定", "不要由模型自由改桶宽"],
+        "notes": ["默认自定义分桶，固定区间通过中间边界表达", "不要由模型自由发明与当前策略无关的桶宽"],
     },
     {
         "preset_key": "recent_batch_brand_avg_rank",

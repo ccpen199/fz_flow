@@ -11,6 +11,7 @@ from .price_scene_config import (
     PRICE_SCENE_NAME,
     PRICE_SCENE_OUT_OF_SCOPE,
     PRICE_SCENE_PRICE_BANDS,
+    PRICE_SCENE_PRICE_BAND_POLICY,
     PRICE_SCENE_QUESTION_MATRIX,
     PRICE_SCENE_RELATIONS,
     PRICE_SCENE_SAMPLE_GOALS,
@@ -119,8 +120,8 @@ COMMON_METRIC_TEMPLATES = [
     },
     {
         "name": "价格带SKU数",
-        "formula": "COUNT(DISTINCT clothing_info.Id) grouped by fixed price band",
-        "description": "按固定价格带分桶后的去重商品数。",
+        "formula": "COUNT(DISTINCT clothing_info.Id) grouped by current price band strategy",
+        "description": "按当前价格带策略分桶后的去重商品数。",
     },
     {
         "name": "组内占比",
@@ -224,13 +225,18 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
             _requirement("抓取日期", "clothing_info", "ReceiveTime", "time", "最近30天窗口"),
         ],
         "derived_metrics": [
-            {"name": "价格带SKU数", "formula": "COUNT(DISTINCT Id) by fixed price band"},
+            {"name": "价格带SKU数", "formula": "COUNT(DISTINCT Id) by current price band strategy"},
             {"name": "品牌内价格带占比", "formula": "价格带SKU数 / 品牌SKU数"},
         ],
         "group_by": ["品牌", "二级类目", "价格带"],
         "sort": [{"metric": "二级类目", "direction": "ASC"}, {"metric": "品牌", "direction": "ASC"}, {"metric": "价格带", "direction": "ASC"}],
         "limit": None,
-        "notes": ["符合PRD 8.1的品牌价格带分布", "价格带口径固定，不由模型自由改桶宽", "没有具体二级类目参数时按二级类目分组，禁止生成 :subcategory 占位符", "最近30天以数据最大 ReceiveTime 为锚点"],
+        "notes": [
+            "符合PRD 8.1的品牌价格带分布",
+            "默认自定义分桶，固定区间通过中间边界表达",
+            "没有具体二级类目参数时按二级类目分组，禁止生成 :subcategory 占位符",
+            "最近30天以数据最大 ReceiveTime 为锚点",
+        ],
     },
     {
         "preset_key": "competitor_subcategory_price_position",
@@ -595,7 +601,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "group_by": ["价格带", "一级类目"],
         "sort": [{"metric": "价格带", "direction": "ASC"}, {"metric": "SKU数", "direction": "DESC"}],
         "limit": 50,
-        "notes": ["把价格结构纳入商品结构视角，不需要平台字段"],
+        "notes": ["把价格结构纳入商品结构视角，不需要平台字段", "默认自定义分桶，固定区间通过中间边界表达"],
     },
     {
         "preset_key": "structure_size_text_candidates",
@@ -869,11 +875,13 @@ PRICE_SCENE_CONFIG = {
     "relations": PRICE_SCENE_RELATIONS,
     "metric_templates": PRICE_SCENE_METRIC_TEMPLATES,
     "price_band_template": PRICE_SCENE_PRICE_BANDS,
+    "price_band_policy": PRICE_SCENE_PRICE_BAND_POLICY,
     "question_matrix": PRICE_SCENE_QUESTION_MATRIX,
     "out_of_scope": PRICE_SCENE_OUT_OF_SCOPE,
     "notes": [
         "商品价格分析来自PRD 9.1的场景创建示例，并作为统一方案v2里的快速总览场景",
         "当前价格场景不使用平台口径",
+        "价格带默认自定义分桶，固定区间通过中间边界表达",
     ],
 }
 
@@ -887,6 +895,17 @@ COMPETITOR_SCENE_CONFIG = {
     "relations": COMPETITOR_SCENE_RELATIONS,
     "metric_templates": COMMON_METRIC_TEMPLATES,
     "price_band_template": COMMON_PRICE_BANDS,
+    "price_band_policy": {
+        "default_mode": "adaptive",
+        "adaptive_bucket_count": 10,
+        "strategy": "equal_width",
+        "boundary": {
+            "enabled": True,
+            "rounding": "auto",
+            "open_ended": True,
+            "custom_boundaries": [],
+        },
+    },
     "question_matrix": COMPETITOR_SCENE_QUESTION_MATRIX,
     "out_of_scope": COMPETITOR_SCENE_OUT_OF_SCOPE,
     "notes": [
@@ -905,6 +924,17 @@ STRUCTURE_SCENE_CONFIG = {
     "relations": STRUCTURE_SCENE_RELATIONS,
     "metric_templates": COMMON_METRIC_TEMPLATES,
     "price_band_template": COMMON_PRICE_BANDS,
+    "price_band_policy": {
+        "default_mode": "adaptive",
+        "adaptive_bucket_count": 10,
+        "strategy": "equal_width",
+        "boundary": {
+            "enabled": True,
+            "rounding": "auto",
+            "open_ended": True,
+            "custom_boundaries": [],
+        },
+    },
     "question_matrix": STRUCTURE_SCENE_QUESTION_MATRIX,
     "out_of_scope": STRUCTURE_SCENE_OUT_OF_SCOPE,
     "notes": [
@@ -923,6 +953,17 @@ TREND_SCENE_CONFIG = {
     "relations": TREND_SCENE_RELATIONS,
     "metric_templates": COMMON_METRIC_TEMPLATES,
     "price_band_template": COMMON_PRICE_BANDS,
+    "price_band_policy": {
+        "default_mode": "adaptive",
+        "adaptive_bucket_count": 10,
+        "strategy": "equal_width",
+        "boundary": {
+            "enabled": True,
+            "rounding": "auto",
+            "open_ended": True,
+            "custom_boundaries": [],
+        },
+    },
     "question_matrix": TREND_SCENE_QUESTION_MATRIX,
     "out_of_scope": TREND_SCENE_OUT_OF_SCOPE,
     "notes": [

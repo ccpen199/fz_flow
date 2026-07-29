@@ -717,11 +717,27 @@ function syncFieldResolutionSelectionsFromDom() {
     const termId = String(term?.term_id || "").trim();
     if (!termId) continue;
     const select = el(`fieldResolutionSelect_${termId}`);
-    if (!select) continue;
-    nextSelections[termId] = normalizeFieldResolutionCandidateIndex(select.value);
+    if (select) {
+      nextSelections[termId] = normalizeFieldResolutionCandidateIndex(select.value);
+      continue;
+    }
+    const picker = document.querySelector(`.field-resolution-picker[data-term-id="${CSS.escape(termId)}"]`);
+    if (!picker) continue;
+    nextSelections[termId] = normalizeFieldResolutionCandidateIndex(state.fieldResolution.selections[termId]);
   }
   state.fieldResolution.selections = nextSelections;
   persistUiState();
+}
+
+function closeFieldResolutionMenus(exceptPicker = null) {
+  document.querySelectorAll(".field-resolution-picker").forEach((picker) => {
+    if (exceptPicker && picker === exceptPicker) return;
+    picker.classList.remove("is-open");
+    const trigger = picker.querySelector("[data-field-resolution-trigger]");
+    const menu = picker.querySelector(".field-resolution-menu");
+    if (trigger) trigger.setAttribute("aria-expanded", "false");
+    if (menu) menu.hidden = true;
+  });
 }
 
 function buildFieldResolutionPayload() {
@@ -813,25 +829,60 @@ function renderFieldResolutionPanel() {
       const termId = String(term?.term_id || "").trim();
       const matches = Array.isArray(term?.matches) ? term.matches : [];
       const currentValue = normalizeFieldResolutionCandidateIndex(state.fieldResolution.selections[termId] ?? (term?.status === "resolved" ? "0" : ""));
-      const options = [];
-      options.push(`<option value="">请选择字段</option>`);
-      options.push(`<option value="__ignore__"${currentValue === "__ignore__" ? " selected" : ""}>不作为过滤条件</option>`);
+      const choices = [
+        {
+          value: "",
+          label: "请选择字段",
+          detail: "先确认这个词对应哪个标准字段",
+        },
+        {
+          value: "__ignore__",
+          label: "不作为过滤条件",
+          detail: "这个词只保留在问题文本中，不写入 WHERE",
+        },
+      ];
       matches.forEach((match, idx) => {
         const value = String(idx);
-        const selected = currentValue === value ? " selected" : "";
-        const label = `${escapeHtml(match.semantic_name || "-")} · ${escapeHtml(match.table_name || "-")}.${escapeHtml(match.field_name || "-")} = ${escapeHtml(match.canonical_value || "-")} (${Number(match.score || 0).toFixed(2)})`;
-        options.push(`<option value="${value}"${selected}>${label}</option>`);
+        choices.push({
+          value,
+          label: `${match.semantic_name || "-"} = ${match.canonical_value || "-"}`,
+          detail: `${match.table_name || "-"}.${match.field_name || "-"} · ${Number(match.score || 0).toFixed(2)}${Number(match.count || 0) ? ` · ${Number(match.count || 0)}条` : ""}`,
+        });
       });
-      const statusText = term?.status === "ambiguous" ? "多个字段命中，请确认" : "已自动识别";
+      const activeChoice = choices.find((choice) => choice.value === currentValue) || choices[0];
+      const options = choices
+        .map((choice) => {
+          const active = choice.value === currentValue ? " is-active" : "";
+          return `
+            <button type="button" class="field-resolution-option${active}" data-field-resolution-value="${escapeHtml(choice.value)}">
+              <span class="field-resolution-option-label">${escapeHtml(choice.label)}</span>
+              <span class="field-resolution-option-detail">${escapeHtml(choice.detail)}</span>
+            </button>
+          `;
+        })
+        .join("");
+      const reason = String(term?.ambiguity_reason || "").trim();
+      const statusText =
+        term?.status === "ambiguous"
+          ? reason === "multiple_values"
+            ? "同字段多个标准值命中，请确认"
+            : "多个字段命中，请确认"
+          : "已自动识别";
       return `
         <div class="field-resolution-row" data-term-id="${escapeHtml(termId)}">
           <div class="field-resolution-term">
             <strong>${escapeHtml(term?.text || "-")}</strong>
             <span>${escapeHtml(statusText)} · ${escapeHtml(term?.source || "-")}</span>
           </div>
-          <select id="fieldResolutionSelect_${escapeHtml(termId)}" class="field-resolution-select">
-            ${options.join("")}
-          </select>
+          <div class="field-resolution-picker" data-term-id="${escapeHtml(termId)}">
+            <button type="button" class="field-resolution-picker-trigger" data-field-resolution-trigger aria-haspopup="listbox" aria-expanded="false">
+              <span class="field-resolution-picker-label">${escapeHtml(activeChoice.label)}</span>
+              <span class="field-resolution-picker-detail">${escapeHtml(activeChoice.detail)}</span>
+            </button>
+            <div class="field-resolution-menu" role="listbox" hidden>
+              ${options}
+            </div>
+          </div>
         </div>
       `;
     })
@@ -3640,7 +3691,38 @@ function bind() {
       if (!(target instanceof HTMLSelectElement)) return;
       syncFieldResolutionSelectionsFromDom();
     });
+    el("fieldResolutionList").addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const trigger = target.closest("[data-field-resolution-trigger]");
+      if (trigger instanceof HTMLElement) {
+        const picker = trigger.closest(".field-resolution-picker");
+        if (!(picker instanceof HTMLElement)) return;
+        const menu = picker.querySelector(".field-resolution-menu");
+        const willOpen = !picker.classList.contains("is-open");
+        closeFieldResolutionMenus(picker);
+        picker.classList.toggle("is-open", willOpen);
+        trigger.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        if (menu) menu.hidden = !willOpen;
+        return;
+      }
+      const option = target.closest("[data-field-resolution-value]");
+      if (option instanceof HTMLElement) {
+        const picker = option.closest(".field-resolution-picker");
+        const termId = String(picker?.getAttribute("data-term-id") || "").trim();
+        if (!termId) return;
+        state.fieldResolution.selections[termId] = normalizeFieldResolutionCandidateIndex(option.dataset.fieldResolutionValue);
+        closeFieldResolutionMenus();
+        persistUiState();
+        renderFieldResolutionPanel();
+      }
+    });
   }
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest(".field-resolution-picker")) return;
+    closeFieldResolutionMenus();
+  });
   el("toggleIntentTemplatesBtn").onclick = () => {
     state.intentTemplatesCollapsed = !state.intentTemplatesCollapsed;
     renderIntentTemplates();

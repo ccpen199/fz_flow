@@ -138,6 +138,7 @@ class SqlResultAgentService:
                     *price_band_override.get("risk_notes", []),
                 ]
         query_run: QueryRunDTO | None = None
+        controlled_sql_issues: list[dict[str, Any]] = []
         if generated_sql:
             generated_sql, sql_value_changes = field_value_resolver_service.rewrite_sql_field_literals(
                 sql=generated_sql,
@@ -145,12 +146,24 @@ class SqlResultAgentService:
                 queryable_fields=available,
             )
             value_resolution_changes.extend(sql_value_changes)
+            controlled_sql_issues = field_value_resolver_service.find_controlled_sql_filter_issues(
+                sql=generated_sql,
+                scene=scene,
+                queryable_fields=available,
+                intent=intent,
+            )
+            if controlled_sql_issues and query_plan is not None:
+                query_plan.risk_notes = [
+                    *query_plan.risk_notes,
+                    *self._controlled_sql_issue_notes(controlled_sql_issues),
+                ]
         if execute:
             output_error = self._validate_llm_sql_output(
                 intent=intent,
                 sql=generated_sql,
                 plan=query_plan,
                 unresolved_filter_issues=unresolved_filter_issues,
+                controlled_sql_issues=controlled_sql_issues,
             )
             if output_error:
                 query_run = self._failed_query_run(
@@ -164,6 +177,7 @@ class SqlResultAgentService:
                     mode=llm_plan.get("mode", "local"),
                     lineage_extra={
                         "price_band_policy": price_band_policy,
+                        "controlled_sql_issues": controlled_sql_issues,
                     },
                 )
             else:
@@ -329,6 +343,8 @@ class SqlResultAgentService:
             "禁止生成任何未绑定占位符或伪参数，包括 :subcategory、:brand、?、${value}、<value>、待确认、待补充；没有具体过滤值时不要写等值过滤。",
             "如果问题里出现“指定二级类目/指定品牌/某类目/某品牌”，但 context 没有提供具体字段值，必须按该字段分组或返回空 sql 说明缺少参数，不能自行发明参数。",
             "只能使用 semantic_fields 中出现的 table_name.field_name，以及 relations 中声明的关联；不要臆造平台、销量、尺码等当前场景未配置或不可用字段。",
+            "品牌、类目、颜色、材质、场景等有标准值库的受控字段必须使用 = 或 IN 精确过滤，禁止 LIKE/LOWER/REPLACE/contains；同一词命中多个标准值时必须先让用户确认，不要按数量或直觉猜一个。",
+            "如果用户表达的是品类/品牌/材质等业务过滤，不要退回到商品 Name/DescribeInfo 的 LIKE 模糊搜索；只有用户明确要求按名称、标题、描述、关键词包含搜索时才允许商品文本 LIKE。",
             "metrics、dimensions 必须是 semantic_name 字符串数组；filters.field 必须是 semantic_name 字符串；不要返回对象，也不要返回字符串化 dict。",
             "涉及多值扩展表时，SKU数必须用 COUNT(DISTINCT clothing_info.Id)，避免 JOIN 放大。",
             "如果问题是商品级候选清单或明细下钻，并且 selected_preset.notes 要求返回商品ID/商品名称等明细字段，不要使用 COUNT、GROUP BY 或聚合指标；每行应代表一个候选商品。",
@@ -1477,6 +1493,7 @@ class SqlResultAgentService:
         notes: list[str] = []
         seen: set[tuple[str, str, str]] = set()
         for item in issues:
+            issue_type = str(item.get("type") or "").strip()
             semantic_name = str(item.get("semantic_name") or item.get("field_name") or "").strip()
             raw_value = str(item.get("raw_value") or "").strip()
             table_name = str(item.get("table_name") or "").strip()
@@ -1487,10 +1504,66 @@ class SqlResultAgentService:
             if key in seen:
                 continue
             seen.add(key)
-            notes.append(
-                f"字段值未命中：{semantic_name} '{raw_value}' 不在当前数据库 {table_name}.{field_name} 的标准值中。"
-            )
+            if issue_type == "ambiguous_value":
+                candidates = self._issue_candidate_text(item)
+                notes.append(
+                    f"字段值有多个标准候选：{semantic_name} '{raw_value}' 命中 {table_name}.{field_name}"
+                    f"{candidates}，请先在字段筛选中确认。"
+                )
+            else:
+                notes.append(
+                    f"字段值未命中：{semantic_name} '{raw_value}' 不在当前数据库 {table_name}.{field_name} 的标准值中。"
+                )
         return notes
+
+    def _controlled_sql_issue_notes(self, issues: list[dict[str, Any]]) -> list[str]:
+        notes: list[str] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for item in issues:
+            issue_type = str(item.get("type") or "").strip()
+            semantic_name = str(item.get("semantic_name") or item.get("field_name") or "").strip()
+            raw_value = str(item.get("raw_value") or "").strip()
+            table_name = str(item.get("table_name") or "").strip()
+            field_name = str(item.get("field_name") or "").strip()
+            operator = str(item.get("operator") or "").strip().upper()
+            key = (issue_type, semantic_name, field_name, raw_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates = self._issue_candidate_text(item)
+            if issue_type in {"controlled_like_operator", "controlled_like_ambiguous", "controlled_like_unresolved"}:
+                notes.append(
+                    f"受控字段禁止模糊匹配：{semantic_name} {table_name}.{field_name} 使用了 {operator} '{raw_value}'"
+                    f"{candidates}，应先解析为标准值后使用 = 或 IN。"
+                )
+            elif issue_type == "controlled_value_ambiguous":
+                notes.append(
+                    f"受控字段标准值有歧义：{semantic_name} '{raw_value}' 命中多个 {table_name}.{field_name} 候选"
+                    f"{candidates}，请先确认。"
+                )
+            elif issue_type == "free_text_like_without_explicit_intent":
+                notes.append(
+                    f"未明确要求按商品文本搜索时，不允许用 {field_name} {operator} '{raw_value}' 代替品牌/品类等标准字段过滤。"
+                )
+            else:
+                notes.append(
+                    f"受控字段标准值未命中：{semantic_name} '{raw_value}' 不在 {table_name}.{field_name} 的标准值中。"
+                )
+        return notes
+
+    def _issue_candidate_text(self, issue: dict[str, Any]) -> str:
+        candidates = issue.get("candidate_values")
+        if not isinstance(candidates, list) or not candidates:
+            return ""
+        values = []
+        for item in candidates[:4]:
+            if isinstance(item, dict):
+                value = str(item.get("value") or "").strip()
+            else:
+                value = str(item or "").strip()
+            if value:
+                values.append(value)
+        return f"（候选：{', '.join(values)}）" if values else ""
 
     def _validate_llm_sql_output(
         self,
@@ -1499,6 +1572,7 @@ class SqlResultAgentService:
         sql: str,
         plan: QueryPlanDTO | None,
         unresolved_filter_issues: list[dict[str, Any]] | None = None,
+        controlled_sql_issues: list[dict[str, Any]] | None = None,
     ) -> str:
         sql_text = str(sql or "").strip()
         if not sql_text:
@@ -1509,6 +1583,12 @@ class SqlResultAgentService:
             return (
                 f"SQL Agent 生成了当前数据库无法命中的标准值过滤，已阻止执行：{notes}。"
                 "请确认字段值写法、先在字段筛选中选择已有标准值，或切换到包含该数据的数据源。"
+            )
+        if controlled_sql_issues:
+            notes = "；".join(self._controlled_sql_issue_notes(controlled_sql_issues))
+            return (
+                f"SQL Agent 生成了不符合受控字段规则的过滤条件，已阻止执行：{notes}。"
+                "品牌、类目、材质、颜色、场景等标准值字段必须先解析为数据库标准值，并使用 = 或 IN 精确过滤。"
             )
         if _UNBOUND_PLACEHOLDER_RE.search(sql_text):
             return "SQL Agent 返回了未绑定占位符，已阻止执行。"

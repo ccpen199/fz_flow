@@ -162,7 +162,7 @@ class FieldValueResolverService:
 
     @property
     def max_distinct_values(self) -> int:
-        return int(os.getenv("FIELD_VALUE_RESOLVER_MAX_DISTINCT", "120"))
+        return int(os.getenv("FIELD_VALUE_RESOLVER_MAX_DISTINCT", "2000"))
 
     @property
     def context_value_limit(self) -> int:
@@ -212,6 +212,7 @@ class FieldValueResolverService:
                 "matching ignores case, whitespace, common separators, full-width/half-width variants, and bracketed remarks",
                 "bracketed text should be treated as a qualifier first; only split it into a separate filter when the scene exposes a matching field and canonical value",
                 "minor character transposes are allowed only when one canonical value is clearly the best match",
+                "controlled standard-value fields must use equality or IN filters; LIKE/contains matching is not allowed",
                 "SQL should use the canonical database value, not the raw user spelling",
             ],
             "fields": field_contexts,
@@ -256,8 +257,12 @@ class FieldValueResolverService:
                         raw_value=item,
                         semantic_name=_field_attr(field, "semantic_name"),
                     )
-                    next_values.append(resolved.get("canonical_value") if resolved.get("resolved") else item)
-                    if resolved.get("changed"):
+                    next_values.append(
+                        resolved.get("canonical_value")
+                        if resolved.get("resolved") and not resolved.get("ambiguous")
+                        else item
+                    )
+                    if resolved.get("changed") and not resolved.get("ambiguous"):
                         changes.append(resolved)
                 next_condition["value"] = next_values
             elif operator in {"=", "like"} and isinstance(value, str):
@@ -268,9 +273,12 @@ class FieldValueResolverService:
                     raw_value=core,
                     semantic_name=_field_attr(field, "semantic_name"),
                 )
-                if resolved.get("resolved"):
-                    next_condition["value"] = f"{prefix}{resolved.get('canonical_value')}{suffix}"
-                if resolved.get("changed"):
+                if resolved.get("resolved") and not resolved.get("ambiguous"):
+                    next_condition["value"] = str(resolved.get("canonical_value") or "").strip()
+                    if operator == "like":
+                        next_condition["operator"] = "="
+                        next_condition["match_mode"] = "canonical_exact"
+                if resolved.get("changed") and not resolved.get("ambiguous"):
                     changes.append(resolved)
             normalized_filters.append(next_condition)
 
@@ -333,10 +341,12 @@ class FieldValueResolverService:
                     semantic_name=semantic_name,
                     candidate_values=values,
                 )
-                if resolved.get("resolved"):
+                if resolved.get("resolved") and not resolved.get("ambiguous"):
                     continue
+                issue_type = "ambiguous_value" if resolved.get("ambiguous") else "unresolved_value"
                 issues.append(
                     {
+                        "type": issue_type,
                         "semantic_name": semantic_name,
                         "table_name": table_name,
                         "field_name": field_name,
@@ -377,6 +387,7 @@ class FieldValueResolverService:
             "raw_value": raw_text,
             "canonical_value": raw_text,
             "resolved": False,
+            "ambiguous": False,
             "changed": False,
             "score": 0.0,
             "strategy": "none",
@@ -405,11 +416,19 @@ class FieldValueResolverService:
         if not raw_key_without_notes:
             return result_base
 
-        for raw_key, strategy in (
-            (raw_key_without_notes, "normalized_exact"),
-            (raw_key_with_notes, "normalized_exact_with_note"),
-        ):
-            exact_matches = [item for item in values if item.normalized == raw_key]
+        exact_lookup_order: list[tuple[str, str]] = []
+        if raw_key_with_notes and raw_key_with_notes != raw_key_without_notes:
+            exact_lookup_order.append((raw_key_with_notes, "normalized_exact_with_note"))
+        exact_lookup_order.append((raw_key_without_notes, "normalized_exact"))
+        for raw_key, strategy in exact_lookup_order:
+            if strategy == "normalized_exact_with_note":
+                exact_matches = [
+                    item
+                    for item in values
+                    if normalize_lookup_value(item.value, drop_bracket_notes=False) == raw_key
+                ]
+            else:
+                exact_matches = [item for item in values if item.normalized == raw_key]
             if exact_matches:
                 best = self._best_count_candidate(exact_matches)
                 return self._resolved_payload(
@@ -478,18 +497,32 @@ class FieldValueResolverService:
                 )
                 if not resolved.get("resolved"):
                     continue
-                matches.append(
-                    {
-                        "semantic_name": _field_attr(field, "semantic_name"),
-                        "table_name": _field_attr(field, "table_name"),
-                        "field_name": _field_attr(field, "field_name"),
-                        "raw_value": term_text,
-                        "canonical_value": str(resolved.get("canonical_value") or "").strip(),
-                        "score": float(resolved.get("score") or 0),
-                        "strategy": str(resolved.get("strategy") or ""),
-                        "count": self._candidate_count(resolved),
-                    }
-                )
+                resolved_candidates = resolved.get("candidates") if isinstance(resolved.get("candidates"), list) else []
+                expanded_candidates = resolved_candidates if resolved.get("ambiguous") else []
+                if not expanded_candidates:
+                    expanded_candidates = [
+                        {
+                            "value": str(resolved.get("canonical_value") or "").strip(),
+                            "count": self._candidate_count(resolved),
+                            "score": float(resolved.get("score") or 0),
+                        }
+                    ]
+                for candidate in expanded_candidates[:6]:
+                    canonical_value = str(candidate.get("value") or "").strip() if isinstance(candidate, dict) else ""
+                    if not canonical_value:
+                        continue
+                    matches.append(
+                        {
+                            "semantic_name": _field_attr(field, "semantic_name"),
+                            "table_name": _field_attr(field, "table_name"),
+                            "field_name": _field_attr(field, "field_name"),
+                            "raw_value": term_text,
+                            "canonical_value": canonical_value,
+                            "score": float(candidate.get("score") if isinstance(candidate, dict) and candidate.get("score") is not None else resolved.get("score") or 0),
+                            "strategy": str(resolved.get("strategy") or ""),
+                            "count": int(candidate.get("count") or 0) if isinstance(candidate, dict) else self._candidate_count(resolved),
+                        }
+                    )
 
             matches = self._dedupe_intent_matches(matches)
             if not matches:
@@ -502,7 +535,19 @@ class FieldValueResolverService:
                 )
                 for match in matches
             }
-            status = "ambiguous" if len(distinct_fields) > 1 else "resolved"
+            distinct_values = {
+                (
+                    str(match.get("semantic_name") or "").strip().lower(),
+                    str(match.get("table_name") or "").strip().lower(),
+                    str(match.get("field_name") or "").strip().lower(),
+                    str(match.get("canonical_value") or "").strip().lower(),
+                )
+                for match in matches
+            }
+            status = "ambiguous" if len(distinct_fields) > 1 or len(distinct_values) > 1 else "resolved"
+            ambiguity_reason = ""
+            if status == "ambiguous":
+                ambiguity_reason = "multiple_fields" if len(distinct_fields) > 1 else "multiple_values"
             groups.append(
                 {
                     "term_id": hashlib.md5(f"{term_index}|{term_text}".encode("utf-8")).hexdigest()[:12],
@@ -511,6 +556,7 @@ class FieldValueResolverService:
                     "normalized": normalize_lookup_value(term_text),
                     "source": term["source"],
                     "status": status,
+                    "ambiguity_reason": ambiguity_reason,
                     "matches": matches[:6],
                     "recommended_match_index": 0,
                 }
@@ -566,20 +612,38 @@ class FieldValueResolverService:
             return []
         terms: list[dict[str, str]] = []
         seen: set[str] = set()
+        covered_base_keys: set[str] = set()
 
-        def add(raw_text: str, source: str) -> None:
+        def add(raw_text: str, source: str, *, covers_base: bool = False) -> None:
             value = str(raw_text or "").strip(" \t\r\n,，。;；:：")
             if not value:
                 return
             normalized = normalize_lookup_value(value)
             if len(normalized) < 2:
                 return
-            if normalized in seen:
+            normalized_with_notes = normalize_lookup_value(value, drop_bracket_notes=False)
+            dedupe_key = normalized_with_notes if source == "qualified_bracket" else normalized
+            if source != "qualified_bracket" and normalized in covered_base_keys:
                 return
-            seen.add(normalized)
+            if dedupe_key in seen:
+                return
+            seen.add(dedupe_key)
+            if covers_base:
+                covered_base_keys.add(normalized)
             terms.append({"text": value, "source": source})
 
         bracket_re = re.compile(r"[\(\[【]([^\)\]】]{1,40})[\)\]】]")
+        bracket_token_re = r"[\(\[【][^\)\]】]{1,40}[\)\]】]"
+        qualified_bracket_re = re.compile(
+            r"(?:"
+            r"[A-Za-z][A-Za-z0-9._&'’/-]*(?:\s+[A-Za-z0-9._&'’/-]+){0,5}"
+            r"|[\u3040-\u30ff\u3400-\u9fff]{2,32}"
+            r")\s*"
+            + bracket_token_re
+        )
+        for match in qualified_bracket_re.finditer(text):
+            add(match.group(0), "qualified_bracket", covers_base=True)
+
         for match in bracket_re.finditer(text):
             add(match.group(1), "bracket")
         text_without_brackets = bracket_re.sub(" ", text)
@@ -588,6 +652,15 @@ class FieldValueResolverService:
         for match in quote_re.finditer(text_without_brackets):
             add(match.group(1), "quoted")
         text_without_quotes = quote_re.sub(" ", text_without_brackets)
+
+        mixed_phrase_re = re.compile(
+            r"(?=[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]{2,32})"
+            r"(?=[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]*[A-Za-z])"
+            r"(?=[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]*[\u3040-\u30ff\u3400-\u9fff])"
+            r"[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]{2,32}"
+        )
+        for match in mixed_phrase_re.finditer(text_without_quotes):
+            add(match.group(0), "mixed_phrase")
 
         english_phrase_re = re.compile(
             r"[A-Za-z][A-Za-z0-9._&'’/-]*(?:\s+[A-Za-z0-9._&'’/-]+){0,5}",
@@ -629,6 +702,201 @@ class FieldValueResolverService:
             changes.extend(field_changes)
         return rewritten, changes
 
+    def find_controlled_sql_filter_issues(
+        self,
+        *,
+        sql: str,
+        scene: Any,
+        queryable_fields: list[Any] | None = None,
+        intent: str = "",
+    ) -> list[dict[str, Any]]:
+        sql_text = str(sql or "")
+        if not sql_text.strip():
+            return []
+
+        issues: list[dict[str, Any]] = []
+        controlled_match_seen = False
+        for field in self._candidate_fields(scene=scene, queryable_fields=queryable_fields):
+            table_name = _field_attr(field, "table_name")
+            field_name = _field_attr(field, "field_name")
+            semantic_name = _field_attr(field, "semantic_name")
+            if not table_name or not field_name:
+                continue
+            values = self._load_field_values(table_name=table_name, field_name=field_name)
+            if not values:
+                continue
+            controlled_match_seen = True
+            issues.extend(
+                self._controlled_field_sql_issues(
+                    sql=sql_text,
+                    table_name=table_name,
+                    field_name=field_name,
+                    semantic_name=semantic_name,
+                    candidate_values=values,
+                )
+            )
+
+        if controlled_match_seen:
+            issues.extend(self._free_text_like_issues(sql=sql_text, intent=intent))
+        return issues
+
+    def _controlled_field_sql_issues(
+        self,
+        *,
+        sql: str,
+        table_name: str,
+        field_name: str,
+        semantic_name: str,
+        candidate_values: list[FieldValueCandidate],
+    ) -> list[dict[str, Any]]:
+        column_pattern = self._sql_column_pattern(field_name)
+        comparison_re = re.compile(
+            rf"(?P<column>(?<![\w`]){column_pattern})\s*"
+            rf"(?P<operator>NOT\s+LIKE|LIKE|=)\s*"
+            rf"(?P<literal>'(?:''|[^'])*')",
+            flags=re.IGNORECASE,
+        )
+        in_re = re.compile(
+            rf"(?P<column>(?<![\w`]){column_pattern})\s+IN\s*\("
+            rf"(?P<body>(?:\s*'(?:''|[^'])*'\s*,?)+)"
+            rf"\)",
+            flags=re.IGNORECASE,
+        )
+        issues: list[dict[str, Any]] = []
+
+        def issue_payload(
+            *,
+            issue_type: str,
+            operator: str,
+            raw_value: str,
+            resolved: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            candidates = []
+            if isinstance(resolved, dict) and isinstance(resolved.get("candidates"), list) and resolved.get("candidates"):
+                candidates = resolved.get("candidates") or []
+            else:
+                candidates = [
+                    {"value": item.value, "count": item.count}
+                    for item in candidate_values[:6]
+                ]
+            return {
+                "type": issue_type,
+                "semantic_name": semantic_name,
+                "table_name": table_name,
+                "field_name": field_name,
+                "operator": operator,
+                "raw_value": raw_value,
+                "candidate_values": candidates,
+            }
+
+        def check_literal(raw_literal: str, operator: str) -> dict[str, Any] | None:
+            prefix, core, suffix = _literal_lookup_parts(raw_literal) if operator in {"LIKE", "NOT LIKE"} else ("", raw_literal, "")
+            lookup_value = core.strip()
+            if not lookup_value:
+                return None
+            resolved = self.resolve_field_value(
+                table_name=table_name,
+                field_name=field_name,
+                raw_value=lookup_value,
+                semantic_name=semantic_name,
+                candidate_values=candidate_values,
+            )
+            if operator in {"LIKE", "NOT LIKE"}:
+                if resolved.get("resolved") and not resolved.get("ambiguous"):
+                    issue_type = "controlled_like_operator"
+                elif resolved.get("ambiguous"):
+                    issue_type = "controlled_like_ambiguous"
+                else:
+                    issue_type = "controlled_like_unresolved"
+                return issue_payload(
+                    issue_type=issue_type,
+                    operator=operator,
+                    raw_value=f"{prefix}{lookup_value}{suffix}",
+                    resolved=resolved,
+                )
+            if not resolved.get("resolved"):
+                return issue_payload(
+                    issue_type="controlled_value_unresolved",
+                    operator=operator,
+                    raw_value=lookup_value,
+                    resolved=resolved,
+                )
+            if resolved.get("ambiguous"):
+                return issue_payload(
+                    issue_type="controlled_value_ambiguous",
+                    operator=operator,
+                    raw_value=lookup_value,
+                    resolved=resolved,
+                )
+            return None
+
+        for match in comparison_re.finditer(sql):
+            operator = " ".join(match.group("operator").upper().split())
+            raw_literal = _unescape_sql_literal(match.group("literal")[1:-1])
+            issue = check_literal(raw_literal, operator)
+            if issue:
+                issues.append(issue)
+
+        for match in in_re.finditer(sql):
+            for literal_match in SQL_STRING_LITERAL_RE.finditer(match.group("body")):
+                raw_literal = _unescape_sql_literal(literal_match.group(1))
+                issue = check_literal(raw_literal, "IN")
+                if issue:
+                    issues.append(issue)
+
+        return self._dedupe_sql_issues(issues)
+
+    def _free_text_like_issues(self, *, sql: str, intent: str = "") -> list[dict[str, Any]]:
+        if self._explicit_free_text_intent(intent):
+            return []
+        free_text_re = re.compile(
+            r"(?<![\w`])(?:`?[A-Za-z_][A-Za-z0-9_]*`?\.)?"
+            r"`?(?P<field>Name|NameEn|DescribeInfo|DescribeInfoEn)`?\s+"
+            r"(?P<operator>NOT\s+LIKE|LIKE)\s*"
+            r"(?P<literal>'(?:''|[^'])*')",
+            flags=re.IGNORECASE,
+        )
+        issues: list[dict[str, Any]] = []
+        for match in free_text_re.finditer(str(sql or "")):
+            issues.append(
+                {
+                    "type": "free_text_like_without_explicit_intent",
+                    "semantic_name": "商品文本",
+                    "table_name": "",
+                    "field_name": match.group("field"),
+                    "operator": " ".join(match.group("operator").upper().split()),
+                    "raw_value": _unescape_sql_literal(match.group("literal")[1:-1]),
+                    "candidate_values": [],
+                }
+            )
+        return self._dedupe_sql_issues(issues)
+
+    def _explicit_free_text_intent(self, intent: str) -> bool:
+        text = str(intent or "").strip().lower()
+        if not text:
+            return False
+        normalized = normalize_lookup_value(text, drop_bracket_notes=False)
+        chinese_markers = ("名称", "标题", "描述", "文案", "关键词", "包含", "含有", "明细", "商品清单", "商品列表")
+        english_markers = ("name", "title", "description", "keyword", "contains", "containing", "product list")
+        return any(marker in text for marker in chinese_markers) or any(marker.replace(" ", "") in normalized for marker in english_markers)
+
+    def _dedupe_sql_issues(self, issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str, str]] = set()
+        for item in issues:
+            key = (
+                str(item.get("type") or ""),
+                str(item.get("table_name") or "").lower(),
+                str(item.get("field_name") or "").lower(),
+                str(item.get("operator") or "").upper(),
+                str(item.get("raw_value") or "").lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
     def _rewrite_direct_field_literals(
         self,
         *,
@@ -639,7 +907,8 @@ class FieldValueResolverService:
     ) -> tuple[str, list[dict[str, Any]]]:
         column_pattern = self._sql_column_pattern(field_name)
         comparison_re = re.compile(
-            rf"(?P<prefix>(?<![\w`]){column_pattern}\s*(?:=|LIKE)\s*)"
+            rf"(?P<column>(?<![\w`]){column_pattern})\s*"
+            rf"(?P<operator>NOT\s+LIKE|LIKE|=)\s*"
             rf"(?P<literal>'(?:''|[^'])*')",
             flags=re.IGNORECASE,
         )
@@ -651,7 +920,7 @@ class FieldValueResolverService:
         )
         changes: list[dict[str, Any]] = []
 
-        def replace_literal(literal_sql: str) -> str:
+        def resolve_literal(literal_sql: str) -> tuple[str, dict[str, Any], str, str, str]:
             raw_literal = _unescape_sql_literal(literal_sql[1:-1])
             prefix, core, suffix = _literal_lookup_parts(raw_literal)
             resolved = self.resolve_field_value(
@@ -660,7 +929,11 @@ class FieldValueResolverService:
                 raw_value=core,
                 semantic_name=semantic_name,
             )
-            if not resolved.get("resolved") or not resolved.get("changed"):
+            return raw_literal, resolved, prefix, core, suffix
+
+        def replace_literal(literal_sql: str) -> str:
+            raw_literal, resolved, prefix, _, suffix = resolve_literal(literal_sql)
+            if not resolved.get("resolved") or resolved.get("ambiguous") or not resolved.get("changed"):
                 return literal_sql
             next_literal = f"{prefix}{resolved.get('canonical_value')}{suffix}"
             changes.append(
@@ -673,7 +946,26 @@ class FieldValueResolverService:
             return _sql_quote_literal(next_literal)
 
         def replace_comparison(match: re.Match[str]) -> str:
-            return f"{match.group('prefix')}{replace_literal(match.group('literal'))}"
+            raw_operator = match.group("operator")
+            operator = " ".join(raw_operator.strip().upper().split())
+            if operator == "LIKE":
+                raw_literal, resolved, _, _, _ = resolve_literal(match.group("literal"))
+                if resolved.get("resolved") and not resolved.get("ambiguous"):
+                    next_literal = str(resolved.get("canonical_value") or "").strip()
+                    changes.append(
+                        {
+                            **resolved,
+                            "sql_literal": raw_literal,
+                            "rewritten_literal": next_literal,
+                            "operator": "LIKE",
+                            "rewritten_operator": "=",
+                        }
+                    )
+                    return f"{match.group('column')} = {_sql_quote_literal(next_literal)}"
+                return match.group(0)
+            if operator == "NOT LIKE":
+                return match.group(0)
+            return f"{match.group('column')} = {replace_literal(match.group('literal'))}"
 
         def replace_in(match: re.Match[str]) -> str:
             body = SQL_STRING_LITERAL_RE.sub(lambda item: replace_literal(item.group(0)), match.group("body"))
@@ -810,10 +1102,20 @@ class FieldValueResolverService:
     ) -> dict[str, Any]:
         raw_value = str(base.get("raw_value") or "")
         canonical = candidate.value
+        unique_candidates: list[FieldValueCandidate] = []
+        seen_values: set[str] = set()
+        for item in alternatives:
+            value_key = str(item.value or "").strip()
+            if not value_key or value_key in seen_values:
+                continue
+            seen_values.add(value_key)
+            unique_candidates.append(item)
+        ambiguous = strategy == "normalized_exact" and len(unique_candidates) > 1
         return {
             **base,
             "canonical_value": canonical,
             "resolved": True,
+            "ambiguous": ambiguous,
             "changed": canonical != raw_value,
             "score": round(score, 4),
             "strategy": strategy,
@@ -821,9 +1123,9 @@ class FieldValueResolverService:
                 {
                     "value": item.value,
                     "count": item.count,
-                    "score": round(score, 4) if item.value == canonical else None,
+                    "score": round(score, 4) if item.value == canonical or ambiguous else None,
                 }
-                for item in alternatives[:3]
+                for item in unique_candidates[:6]
             ],
         }
 

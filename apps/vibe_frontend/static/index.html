@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FZ 智能分析工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20260729-field-picker-ui" />
+    <link rel="stylesheet" href="./styles.css?v=20260804-config-flow-help" />
   </head>
   <body>
     <div class="app-bg"></div>
@@ -141,7 +141,7 @@
                 <section class="scene-config-list-block">
                   <div class="section-head scene-config-list-head">
                     <h4 class="config-subtitle">当前已选择导入清单</h4>
-                    <span id="sceneConfigListHint" class="muted">来源：当前推荐结果中已勾选的字段与关系</span>
+                    <span id="sceneConfigListHint" class="muted">来源：当前推荐与历史已选清单</span>
                   </div>
                   <div id="sceneConfigListSummary" class="muted llm-candidate-summary"></div>
                   <div class="scene-config-list-grid">
@@ -157,6 +157,7 @@
                 </section>
                 <div class="llm-agent-tools">
                   <input id="llmGoal" placeholder="推荐目标（可选），如：聚焦品牌-平台价格对比" />
+                  <button id="configFlowHelpBtn" type="button" class="secondary">流程用法</button>
                 </div>
                 <div id="llmCacheStatus" class="muted llm-candidate-summary"></div>
                 <div id="agentWaitHint" class="muted agent-wait-hint" hidden></div>
@@ -542,6 +543,33 @@
 品牌 -> dimension</pre>
       </div>
     </dialog>
-    <script src="./main.js?v=20260729-field-picker-ui"></script>
+    <dialog id="configFlowHelpDialog" class="guide-dialog">
+      <div class="guide-head">
+        <h3>配置中心流程用法</h3>
+        <button id="closeConfigFlowHelpBtn" class="secondary" type="button">关闭</button>
+      </div>
+      <div class="guide-body">
+        <p><strong>整体流程</strong>：创建场景 -> 写场景描述 -> 点 DB缓存读取数据库结构 -> 写本次推荐目标 -> 点推荐 -> 勾选字段/关系 -> 导入勾选 -> 去查询执行提问。</p>
+        <p><strong>场景描述</strong> 是长期业务边界，创建场景时填写，决定这个场景大体围绕什么业务和数据范围。它不适合每次都改。</p>
+        <pre class="guide-pre">场景描述示例：
+服装商品数据分析，围绕品牌、区域、类目、价格、上新、平台、库存等维度做分析。
+
+品牌价格分析场景，重点关注品牌、平台、二级类目、价格带、折扣和时间窗口。</pre>
+        <p><strong>推荐目标</strong> 是当前这一次推荐的临时重点，基于当前场景和数据库结构返回不同候选字段/关系，供人工筛选。</p>
+        <pre class="guide-pre">推荐目标示例：
+识别品牌中国和日本版本的区分字段，优先推荐品牌字典、区域字段和关联关系。
+
+补充价格带分析需要的字段，优先推荐价格、吊牌价、折扣、时间和类目字段。
+
+补充类目结构分析配置，优先推荐一级类目、二级类目、叶子类目和类目字典关系。</pre>
+        <p><strong>怎么判断结果</strong>：推荐结果只是候选，不会直接生效。字段和关系进入“已选列表”后，还要点击“导入勾选”，才会写入当前场景配置。</p>
+        <p><strong>常见用法</strong>：同一个场景可以多次推荐。第一次补品牌/区域，第二次补价格，第三次补类目。每次只勾选这次确认需要的字段和关系。</p>
+        <pre class="guide-pre">推荐配置完成后，可以去“查询执行”测试：
+优衣库中国和日本最近30天价格带分布
+各品牌在不同二级类目的价格区间占比
+最近30天各平台上新SKU数趋势</pre>
+      </div>
+    </dialog>
+    <script src="./main.js?v=20260804-config-flow-help"></script>
   </body>
 </html>

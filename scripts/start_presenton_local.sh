@@ -16,7 +16,7 @@ fi
 
 HOST="${PRESENTON_HOST:-127.0.0.1}"
 
-endpoint="${SQL_RESULT_AGENT_HTTP_ENDPOINT:-}"
+endpoint="${LLM_AGENT_HTTP_ENDPOINT:-}"
 if [ -n "$endpoint" ]; then
   endpoint="${endpoint%/chat/completions}"
 fi
@@ -38,8 +38,8 @@ export MIGRATE_DATABASE_ON_STARTUP="${MIGRATE_DATABASE_ON_STARTUP:-false}"
 export PRESENTON_FORCE_LAYOUT_ID="${PRESENTON_FORCE_LAYOUT_ID:-}"
 export LLM="${LLM:-custom}"
 export CUSTOM_LLM_URL="${CUSTOM_LLM_URL:-$endpoint}"
-export CUSTOM_LLM_API_KEY="${CUSTOM_LLM_API_KEY:-${SQL_RESULT_AGENT_API_KEY:-}}"
-export CUSTOM_MODEL="${CUSTOM_MODEL:-${SQL_RESULT_AGENT_HTTP_MODEL:-}}"
+export CUSTOM_LLM_API_KEY="${CUSTOM_LLM_API_KEY:-${LLM_AGENT_API_KEY:-}}"
+export CUSTOM_MODEL="${CUSTOM_MODEL:-${LLM_AGENT_HTTP_MODEL:-}}"
 
 mkdir -p "$APP_DATA_DIRECTORY" "$TEMP_DIRECTORY"
 

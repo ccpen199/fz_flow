@@ -20,7 +20,9 @@ app/routers/slides.py
 app/routers/sql_result_agent.py
 app/services/__init__.py
 app/services/artifact_service.py
+app/services/field_value_resolver_service.py
 app/services/insight_narrative_service.py
+app/services/latest_scene_config.py
 app/services/llm_agent_service.py
 app/services/prd_scene_configs.py
 app/services/price_scene_config.py

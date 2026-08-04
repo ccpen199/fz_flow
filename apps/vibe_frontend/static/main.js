@@ -930,6 +930,7 @@ function setSceneDraft(sceneId, draft, options = {}) {
   const key = String(sceneId || "").trim();
   if (!key) return;
   if (draft && typeof draft === "object") {
+    syncDraftSelectionState(draft);
     state.llmDraftBySceneId[key] = draft;
   } else {
     delete state.llmDraftBySceneId[key];
@@ -1612,10 +1613,134 @@ function ensureDraftCandidateMeta(draft) {
   return draft;
 }
 
+function getDraftSelectionKey(kind) {
+  return kind === "field" ? "selected_fields" : "selected_relations";
+}
+
+function normalizeSelectionItem(kind, item, index) {
+  const clone = { ...(item && typeof item === "object" ? item : {}) };
+  if (!clone.candidate_id) {
+    clone.candidate_id = normalizeCandidateId(kind === "field" ? "fld" : "rel", clone, index);
+  }
+  clone.selected = true;
+  return clone;
+}
+
+function normalizeSelectionList(kind, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const normalized = [];
+  const seen = new Set();
+  for (let i = 0; i < list.length; i += 1) {
+    const item = list[i];
+    if (!item || typeof item !== "object") continue;
+    const clone = normalizeSelectionItem(kind, item, i);
+    const key = String(clone.candidate_id || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(clone);
+  }
+  return normalized;
+}
+
+function syncDraftSelectionState(draft) {
+  if (!draft || typeof draft !== "object") return draft;
+  const candidates = draft.candidates && typeof draft.candidates === "object" ? draft.candidates : {};
+  const syncKind = (kind, listKey) => {
+    const selectedKey = getDraftSelectionKey(kind);
+    const snapshot = normalizeSelectionList(kind, draft[selectedKey]);
+    const selectedMap = new Map(snapshot.map((item) => [String(item.candidate_id || "").trim(), item]));
+    const list = Array.isArray(candidates[listKey]) ? candidates[listKey] : [];
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i];
+      if (!item || typeof item !== "object") continue;
+      if (!item.candidate_id) item.candidate_id = normalizeCandidateId(kind === "field" ? "fld" : "rel", item, i);
+      const candidateId = String(item.candidate_id || "").trim();
+      if (!candidateId) continue;
+      const currentSelected = selectedMap.get(candidateId);
+      if (currentSelected) {
+        item.selected = true;
+        selectedMap.set(candidateId, { ...currentSelected, ...normalizeSelectionItem(kind, item, i) });
+        continue;
+      }
+      if (item.selected !== false) {
+        selectedMap.set(candidateId, normalizeSelectionItem(kind, item, i));
+      }
+    }
+    draft[selectedKey] = [...selectedMap.values()];
+    return draft[selectedKey];
+  };
+  syncKind("field", "fields");
+  syncKind("relation", "relations");
+  return draft;
+}
+
+function mergeDraftSelectionState(targetDraft, sourceDraft) {
+  if (!targetDraft || typeof targetDraft !== "object") return targetDraft;
+  const mergeByCandidateId = (rowsA, rowsB, kind) => {
+    const merged = new Map();
+    for (const item of normalizeSelectionList(kind, rowsA)) {
+      const key = String(item.candidate_id || "").trim();
+      if (!key) continue;
+      merged.set(key, item);
+    }
+    for (const item of normalizeSelectionList(kind, rowsB)) {
+      const key = String(item.candidate_id || "").trim();
+      if (!key) continue;
+      const previous = merged.get(key) || {};
+      merged.set(key, { ...previous, ...item });
+    }
+    return [...merged.values()];
+  };
+  targetDraft.selected_fields = mergeByCandidateId(sourceDraft?.selected_fields, targetDraft.selected_fields, "field");
+  targetDraft.selected_relations = mergeByCandidateId(sourceDraft?.selected_relations, targetDraft.selected_relations, "relation");
+  return syncDraftSelectionState(targetDraft);
+}
+
+function removeDraftSelectionItem(draft, kind, candidateId) {
+  if (!draft || typeof draft !== "object") return false;
+  const targetId = String(candidateId || "").trim();
+  if (!targetId) return false;
+  const selectedKey = getDraftSelectionKey(kind);
+  const currentSnapshot = normalizeSelectionList(kind, draft[selectedKey]);
+  const nextSnapshot = currentSnapshot.filter((item) => String(item.candidate_id || "").trim() !== targetId);
+  const changedSnapshot = nextSnapshot.length !== currentSnapshot.length;
+  draft[selectedKey] = nextSnapshot;
+  const listKey = kind === "field" ? "fields" : "relations";
+  const currentCandidates = Array.isArray(draft?.candidates?.[listKey]) ? draft.candidates[listKey] : [];
+  let changedCandidate = false;
+  for (const item of currentCandidates) {
+    if (!item || typeof item !== "object") continue;
+    if (String(item.candidate_id || "").trim() === targetId) {
+      item.selected = false;
+      changedCandidate = true;
+    }
+  }
+  syncDraftSelectionState(draft);
+  return changedSnapshot || changedCandidate;
+}
+
 function formatConfidence(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "-";
   return num.toFixed(2);
+}
+
+function formatCandidateMeta(item) {
+  if (!item || typeof item !== "object") return "";
+  const parts = [];
+  const fieldType = String(item.column_type || item.field_type || item.data_type || "").trim();
+  const tableRole = String(item.table_role_hint || "").trim();
+  const fieldRole = String(item.field_role_hint || "").trim();
+  const origin = String(item.origin || "").trim();
+  if (fieldType) parts.push(fieldType);
+  if (item.is_primary === true) parts.push("PK");
+  if (item.is_nullable === false) parts.push("NOT NULL");
+  if (tableRole) parts.push(tableRole);
+  if (fieldRole) parts.push(fieldRole);
+  if (origin) parts.push(origin);
+  const comment = String(item.column_comment || item.table_comment || "").trim();
+  if (comment) parts.push(comment);
+  return parts.slice(0, 5).join(" / ");
 }
 
 function formatUnixSeconds(value) {
@@ -1660,7 +1785,7 @@ function renderLlmCandidateTable(kind, rows) {
   if (!rows?.length) return `<div class="scene-summary-empty muted">暂无${kind === "field" ? "字段" : "关系"}候选</div>`;
   if (kind === "field") {
     return (
-      `${renderFixedTableOpen(["llm-candidate-table", "llm-candidate-field-table", "uniform-list-table"], [42, 96, 96, 72, 72, 72, 96])}<thead><tr><th>导入</th><th>semantic</th><th>table.field</th><th>role</th><th>required</th><th>confidence</th><th>reason</th></tr></thead><tbody>` +
+      `${renderFixedTableOpen(["llm-candidate-table", "llm-candidate-field-table", "uniform-list-table"], [42, 88, 96, 64, 110, 64, 72, 118])}<thead><tr><th>导入</th><th>semantic</th><th>table.field</th><th>role</th><th>schema信息</th><th>required</th><th>confidence</th><th>reason</th></tr></thead><tbody>` +
       rows
         .map((item) => {
           const checked = item.selected !== false ? "checked" : "";
@@ -1670,6 +1795,7 @@ function renderLlmCandidateTable(kind, rows) {
             <td>${escapeHtml(item.semantic_name || "")}</td>
             <td>${escapeHtml(`${item.table_name || ""}.${item.field_name || ""}`)}</td>
             <td>${escapeHtml(item.role || "")}</td>
+            <td>${escapeHtml(formatCandidateMeta(item))}</td>
             <td>${escapeHtml(requiredText)}</td>
             <td>${escapeHtml(formatConfidence(item.confidence))}</td>
             <td>${escapeHtml(item.reason || item.description || "")}</td>
@@ -1680,7 +1806,7 @@ function renderLlmCandidateTable(kind, rows) {
     );
   }
   return (
-    `${renderFixedTableOpen(["llm-candidate-table", "llm-candidate-relation-table", "uniform-list-table"], [42, 96, 72, 72, 72, 72, 96])}<thead><tr><th>导入</th><th>relation</th><th>join</th><th>cardinality</th><th>required</th><th>confidence</th><th>reason</th></tr></thead><tbody>` +
+    `${renderFixedTableOpen(["llm-candidate-table", "llm-candidate-relation-table", "uniform-list-table"], [42, 116, 64, 72, 84, 64, 72, 118])}<thead><tr><th>导入</th><th>relation</th><th>join</th><th>cardinality</th><th>来源</th><th>required</th><th>confidence</th><th>reason</th></tr></thead><tbody>` +
     rows
       .map((item) => {
         const checked = item.selected !== false ? "checked" : "";
@@ -1690,6 +1816,7 @@ function renderLlmCandidateTable(kind, rows) {
           <td>${escapeHtml(`${item.left_table || ""}.${item.left_field || ""} = ${item.right_table || ""}.${item.right_field || ""}`)}</td>
           <td>${escapeHtml(item.join_type || "")}</td>
           <td>${escapeHtml(item.cardinality || "")}</td>
+          <td>${escapeHtml(formatCandidateMeta(item))}</td>
           <td>${escapeHtml(requiredText)}</td>
           <td>${escapeHtml(formatConfidence(item.confidence))}</td>
           <td>${escapeHtml(item.reason || item.note || "")}</td>
@@ -1722,8 +1849,14 @@ function renderLlmCandidateSelector() {
   const relations = Array.isArray(candidates.relations) ? candidates.relations : [];
   const selectedFields = fields.filter((item) => item?.selected !== false).length;
   const selectedRelations = relations.filter((item) => item?.selected !== false).length;
-  tableCandidates.textContent = tables.length ? `LLM 表候选：${tables.join("、")}` : "LLM 表候选：未返回";
-  summary.textContent = `候选导入状态：字段 ${selectedFields}/${fields.length}，关系 ${selectedRelations}/${relations.length}。应用时仅导入已勾选项。`;
+  const schemaSummary = draft?.schema_summary && typeof draft.schema_summary === "object" ? draft.schema_summary : {};
+  const dictionaryHints = Array.isArray(draft?.dictionary_table_hints) ? draft.dictionary_table_hints : [];
+  const schemaText = Number(schemaSummary.table_count || 0) > 0
+    ? `；schema 表 ${schemaSummary.table_count || 0}，字段 ${schemaSummary.field_count || 0}，关系候选 ${schemaSummary.relation_candidate_count || 0}，字典/主数据候选 ${schemaSummary.dictionary_table_count || dictionaryHints.length}`
+    : "";
+  const noteText = Array.isArray(draft?.notes) && draft.notes.length ? `；备注：${draft.notes.slice(0, 2).join("；")}` : "";
+  tableCandidates.textContent = tables.length ? `LLM 表候选：${tables.join("、")}${schemaText}` : `LLM 表候选：未返回${schemaText}`;
+  summary.textContent = `候选导入状态：字段 ${selectedFields}/${fields.length}，关系 ${selectedRelations}/${relations.length}。应用时仅导入已勾选项${noteText}。`;
   fieldsWrap.innerHTML = renderLlmCandidateTable("field", fields);
   relationsWrap.innerHTML = renderLlmCandidateTable("relation", relations);
 }
@@ -1753,6 +1886,9 @@ function setLlmCandidateSelected(kind, candidateId, selected) {
       break;
     }
   }
+  if (!selected) {
+    changed = removeDraftSelectionItem(draft, kind, candidateId) || changed;
+  }
   if (!changed) return;
   state.currentLlmAgentDraft = draft;
   setSceneDraft(state.currentSceneId, draft);
@@ -1768,6 +1904,9 @@ function setAllLlmCandidates(kind, selected) {
     if (!item || typeof item !== "object") continue;
     if (!item.candidate_id) item.candidate_id = normalizeCandidateId(kind === "field" ? "fld" : "rel", item, i);
     item.selected = selected;
+    if (!selected) {
+      removeDraftSelectionItem(draft, kind, item.candidate_id);
+    }
   }
   state.currentLlmAgentDraft = draft;
   setSceneDraft(state.currentSceneId, draft);
@@ -2026,6 +2165,7 @@ function renderSceneConfig() {
   const configView = el("sceneConfigView");
   const fieldsWrap = el("sceneFieldsWrap");
   const relationsWrap = el("sceneRelationsWrap");
+  const sceneConfigListHint = el("sceneConfigListHint");
   const sceneConfigListSummary = el("sceneConfigListSummary");
   const sceneConfigFieldsWrap = el("sceneConfigFieldsWrap");
   const sceneConfigRelationsWrap = el("sceneConfigRelationsWrap");
@@ -2049,6 +2189,7 @@ function renderSceneConfig() {
     summaryWrap.innerHTML = "";
     configView.textContent = pretty({});
     sceneConfigListSummary.textContent = "尚未选择场景。";
+    if (sceneConfigListHint) sceneConfigListHint.textContent = "来源：当前场景已选清单。";
     sceneConfigFieldsWrap.innerHTML = "";
     sceneConfigRelationsWrap.innerHTML = "";
     fieldsWrap.innerHTML = "";
@@ -2092,26 +2233,31 @@ function renderSceneConfig() {
     relations_count: scene.relations?.length || 0,
     duplicate_fields_hidden: dedupedSemantic.duplicateCount,
   });
-  if (state.currentLlmAgentDraft) ensureDraftCandidateMeta(state.currentLlmAgentDraft);
+  if (state.currentLlmAgentDraft) {
+    ensureDraftCandidateMeta(state.currentLlmAgentDraft);
+    syncDraftSelectionState(state.currentLlmAgentDraft);
+  }
   renderLlmCandidateSelector();
   renderLlmCacheStatus();
 
   const sceneRelations = Array.isArray(scene.relations) ? scene.relations : [];
   const recommendation = state.currentLlmAgentDraft ? ensureDraftCandidateMeta(state.currentLlmAgentDraft) : null;
-  const selectedDraftFields = Array.isArray(recommendation?.candidates?.fields)
-    ? recommendation.candidates.fields.filter((item) => item?.selected !== false)
-    : [];
-  const selectedDraftRelations = Array.isArray(recommendation?.candidates?.relations)
-    ? recommendation.candidates.relations.filter((item) => item?.selected !== false)
-    : [];
+  const selectedDraftFields = normalizeSelectionList("field", recommendation?.selected_fields);
+  const selectedDraftRelations = normalizeSelectionList("relation", recommendation?.selected_relations);
   if (recommendation) {
     sceneConfigListSummary.textContent =
-      `当前已选字段 ${selectedDraftFields.length}，已选关系 ${selectedDraftRelations.length}。点击“剔除”可从本次已选择列表中移除。`;
+      `当前已选字段 ${selectedDraftFields.length}，已选关系 ${selectedDraftRelations.length}。切换推荐目标会保留已选清单，点击“剔除”可从清单中移除。`;
+    if (sceneConfigListHint) {
+      sceneConfigListHint.textContent = "来源：当前推荐与历史已选清单，切换推荐目标不会清空。";
+    }
   } else {
     sceneConfigListSummary.textContent =
       dedupedSemantic.duplicateCount > 0
         ? `尚未生成推荐结果。当前场景字段 ${sceneFields.length}（已隐藏重复 ${dedupedSemantic.duplicateCount}），启用字段 ${queryableDedupedFields.length}，关系 ${sceneRelations.length}。`
         : `尚未生成推荐结果。当前场景字段 ${sceneFields.length}，启用字段 ${queryableDedupedFields.length}，关系 ${sceneRelations.length}。`;
+    if (sceneConfigListHint) {
+      sceneConfigListHint.textContent = "来源：当前场景已选清单。";
+    }
   }
   sceneConfigFieldsWrap.innerHTML = renderSelectedDraftTable("field", selectedDraftFields);
   sceneConfigRelationsWrap.innerHTML = renderSelectedDraftTable("relation", selectedDraftRelations);
@@ -2138,12 +2284,17 @@ function requireCurrentRecommendation() {
   if (!recommendation || typeof recommendation !== "object") {
     throw new Error("推荐结果为空：请先点击“推荐”生成候选列表");
   }
+  syncDraftSelectionState(recommendation);
   return recommendation;
 }
 
 function removeSelectedDraftCandidate(kind, candidateId) {
   if (!candidateId) return;
-  setLlmCandidateSelected(kind, candidateId, false);
+  const draft = requireCurrentRecommendation();
+  if (!removeDraftSelectionItem(draft, kind, candidateId)) return;
+  state.currentLlmAgentDraft = draft;
+  setSceneDraft(state.currentSceneId, draft);
+  renderSceneConfig();
 }
 
 function formatHistoryTime(value) {
@@ -2901,6 +3052,7 @@ async function refreshSceneDetail() {
     }
   }
   state.currentLlmAgentDraft = draft;
+  if (state.currentLlmAgentDraft) syncDraftSelectionState(state.currentLlmAgentDraft);
   renderSceneConfig();
   renderPriceBandModeControl();
 }
@@ -2908,6 +3060,7 @@ async function refreshSceneDetail() {
 async function recommendSceneByLlm() {
   if (!state.currentSceneId) throw new Error("未选择场景");
   const goal = (el("llmGoal")?.value || "").trim();
+  const previousDraft = getSceneDraft(state.currentSceneId);
   const result = await api(`/api/v1/scene-builder/scenes/${state.currentSceneId}/candidates`, {
     method: "POST",
     body: JSON.stringify({
@@ -2925,6 +3078,9 @@ async function recommendSceneByLlm() {
     goal: result.goal || "",
     notes: Array.isArray(result.notes) ? result.notes : [],
     field_type_list: Array.isArray(result?.meta?.field_type_list) ? result.meta.field_type_list : [],
+    business_context: result?.meta?.business_context && typeof result.meta.business_context === "object" ? result.meta.business_context : {},
+    schema_summary: result?.meta?.schema_summary && typeof result.meta.schema_summary === "object" ? result.meta.schema_summary : {},
+    dictionary_table_hints: Array.isArray(result?.meta?.dictionary_table_hints) ? result.meta.dictionary_table_hints : [],
     candidates: {
       tables: Array.isArray(result?.meta?.table_candidates) ? result.meta.table_candidates : [],
       fields: Array.isArray(result.field_candidates) ? result.field_candidates : [],
@@ -2934,6 +3090,7 @@ async function recommendSceneByLlm() {
     },
   };
   ensureDraftCandidateMeta(state.currentLlmAgentDraft);
+  mergeDraftSelectionState(state.currentLlmAgentDraft, previousDraft);
   setSceneDraft(state.currentSceneId, state.currentLlmAgentDraft);
   renderSceneConfig();
 }
@@ -2955,6 +3112,7 @@ async function validateSceneDraftFromLlm() {
     },
   };
   ensureDraftCandidateMeta(state.currentLlmAgentDraft);
+  mergeDraftSelectionState(state.currentLlmAgentDraft, recommendation);
   setSceneDraft(state.currentSceneId, state.currentLlmAgentDraft);
   renderSceneConfig();
 }
@@ -2963,12 +3121,8 @@ async function applySceneDraftFromLlm() {
   if (!state.currentSceneId) throw new Error("未选择场景");
   const mergeMode = "append";
   const recommendation = requireCurrentRecommendation();
-  const fields = Array.isArray(recommendation?.candidates?.fields)
-    ? recommendation.candidates.fields.filter((item) => item?.selected !== false)
-    : [];
-  const relations = Array.isArray(recommendation?.candidates?.relations)
-    ? recommendation.candidates.relations.filter((item) => item?.selected !== false)
-    : [];
+  const fields = normalizeSelectionList("field", recommendation?.selected_fields);
+  const relations = normalizeSelectionList("relation", recommendation?.selected_relations);
   const selectedFields = fields.map((item) => ({
     table_name: item.table_name || "",
     field_name: item.field_name || "",
@@ -3006,6 +3160,7 @@ async function applySceneDraftFromLlm() {
     last_apply_result: result,
   };
   ensureDraftCandidateMeta(state.currentLlmAgentDraft);
+  mergeDraftSelectionState(state.currentLlmAgentDraft, recommendation);
   setSceneDraft(state.currentSceneId, state.currentLlmAgentDraft);
   await refreshScenes();
 }
@@ -3022,6 +3177,7 @@ async function publishSceneFromLlm() {
     last_publish_result: result,
   };
   ensureDraftCandidateMeta(state.currentLlmAgentDraft);
+  mergeDraftSelectionState(state.currentLlmAgentDraft, recommendation);
   setSceneDraft(state.currentSceneId, state.currentLlmAgentDraft);
   await refreshScenes();
 }
@@ -3828,6 +3984,8 @@ function bind() {
   if (el("closeGuideBtn")) el("closeGuideBtn").onclick = () => el("guideDialog").close();
   if (el("fieldRoleHelpBtn")) el("fieldRoleHelpBtn").onclick = () => el("fieldRoleHelpDialog").showModal();
   if (el("closeFieldRoleHelpBtn")) el("closeFieldRoleHelpBtn").onclick = () => el("fieldRoleHelpDialog").close();
+  if (el("configFlowHelpBtn")) el("configFlowHelpBtn").onclick = () => el("configFlowHelpDialog").showModal();
+  if (el("closeConfigFlowHelpBtn")) el("closeConfigFlowHelpBtn").onclick = () => el("configFlowHelpDialog").close();
   el("refreshConfigBtn").onclick = () => run(refreshSceneDetail);
   el("refreshDbCacheBtn").onclick = () => run(refreshDbCacheFromMysql);
   el("addFieldBtn").onclick = () => run(addSceneField);

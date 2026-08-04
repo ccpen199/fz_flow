@@ -605,6 +605,11 @@ select {
   margin-top: 10px;
 }
 
+.llm-agent-tools button {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
 .llm-candidate-tools {
   display: flex;
   flex-wrap: wrap;
@@ -1776,7 +1781,7 @@ button:disabled {
 [data-tab-panel="config"] .llm-candidate-table {
   table-layout: fixed;
   font-size: 12px;
-  min-width: 640px;
+  min-width: 760px;
 }
 
 [data-tab-panel="config"] .llm-candidate-table th,
@@ -1819,6 +1824,11 @@ button:disabled {
 
 [data-tab-panel="config"] .llm-candidate-field-table th:nth-child(7),
 [data-tab-panel="config"] .llm-candidate-field-table td:nth-child(7) {
+  width: 9%;
+}
+
+[data-tab-panel="config"] .llm-candidate-field-table th:nth-child(8),
+[data-tab-panel="config"] .llm-candidate-field-table td:nth-child(8) {
   width: 14%;
 }
 
@@ -1849,6 +1859,11 @@ button:disabled {
 
 [data-tab-panel="config"] .llm-candidate-relation-table th:nth-child(7),
 [data-tab-panel="config"] .llm-candidate-relation-table td:nth-child(7) {
+  width: 10%;
+}
+
+[data-tab-panel="config"] .llm-candidate-relation-table th:nth-child(8),
+[data-tab-panel="config"] .llm-candidate-relation-table td:nth-child(8) {
   width: 18%;
 }
 

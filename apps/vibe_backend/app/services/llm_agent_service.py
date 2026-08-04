@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
+import re
 import threading
 import time
 from uuid import uuid4
@@ -25,35 +27,91 @@ def _mysql_config() -> dict:
     }
 
 
-def _safe_fetch_schema() -> tuple[dict[str, list[str]], dict[str, dict[str, str]], str | None]:
+def _safe_fetch_schema() -> tuple[
+    dict[str, list[str]],
+    dict[str, dict[str, str]],
+    list[dict],
+    dict[str, dict[str, dict]],
+    str | None,
+]:
     mysql_cfg = _mysql_config()
     schema: dict[str, list[str]] = {}
     column_types: dict[str, dict[str, str]] = {}
+    schema_tables_by_name: dict[str, dict] = {}
+    column_metadata: dict[str, dict[str, dict]] = {}
     try:
         conn = pymysql.connect(**mysql_cfg)
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE
-                    FROM information_schema.columns
-                    WHERE table_schema = %s
-                    ORDER BY TABLE_NAME, ORDINAL_POSITION
+                    SELECT
+                      c.TABLE_NAME,
+                      COALESCE(t.TABLE_COMMENT, '') AS TABLE_COMMENT,
+                      c.COLUMN_NAME,
+                      c.DATA_TYPE,
+                      c.COLUMN_TYPE,
+                      c.ORDINAL_POSITION,
+                      c.IS_NULLABLE,
+                      c.COLUMN_KEY,
+                      COALESCE(c.COLUMN_COMMENT, '') AS COLUMN_COMMENT
+                    FROM information_schema.columns c
+                    LEFT JOIN information_schema.tables t
+                      ON t.TABLE_SCHEMA = c.TABLE_SCHEMA
+                     AND t.TABLE_NAME = c.TABLE_NAME
+                    WHERE c.TABLE_SCHEMA = %s
+                    ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION
                     """,
                     (mysql_cfg["database"],),
                 )
                 for row in cur.fetchall():
-                    table_name = row["TABLE_NAME"]
-                    column_name = row["COLUMN_NAME"]
+                    table_name = str(row.get("TABLE_NAME", "")).strip()
+                    column_name = str(row.get("COLUMN_NAME", "")).strip()
+                    if not table_name or not column_name:
+                        continue
+                    table_comment = str(row.get("TABLE_COMMENT") or "").strip()
                     data_type = str(row.get("DATA_TYPE", "")).strip().lower()
+                    column_type = str(row.get("COLUMN_TYPE", "")).strip().lower()
+                    ordinal_position = int(row.get("ORDINAL_POSITION") or 0)
+                    is_nullable = str(row.get("IS_NULLABLE") or "").strip().upper() == "YES"
+                    is_primary = str(row.get("COLUMN_KEY") or "").strip().upper() == "PRI"
+                    column_comment = str(row.get("COLUMN_COMMENT") or "").strip()
                     schema.setdefault(table_name, []).append(column_name)
                     if data_type:
                         column_types.setdefault(table_name, {})[column_name] = data_type
+                    table_meta = schema_tables_by_name.setdefault(
+                        table_name,
+                        {
+                            "table_name": table_name,
+                            "table_comment": table_comment,
+                            "table_role_hint": "",
+                            "columns": [],
+                        },
+                    )
+                    if table_comment and not table_meta.get("table_comment"):
+                        table_meta["table_comment"] = table_comment
+                    column_meta = {
+                        "field_name": column_name,
+                        "column_name": column_name,
+                        "data_type": data_type,
+                        "field_type": data_type,
+                        "column_type": column_type or data_type,
+                        "ordinal_position": ordinal_position,
+                        "is_nullable": is_nullable,
+                        "is_primary": is_primary,
+                        "column_comment": column_comment,
+                    }
+                    table_meta["columns"].append(column_meta)
+                    column_metadata.setdefault(table_name, {})[column_name] = column_meta
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001
-        return {}, {}, str(exc)
-    return schema, column_types, None
+        return {}, {}, [], {}, str(exc)
+
+    schema_tables = list(schema_tables_by_name.values())
+    for table_meta in schema_tables:
+        table_meta["table_role_hint"] = _guess_table_role(table_meta)
+    return schema, column_types, schema_tables, column_metadata, None
 
 
 def _safe_fetch_foreign_keys() -> tuple[list[dict], str | None]:
@@ -98,6 +156,250 @@ def _safe_fetch_foreign_keys() -> tuple[list[dict], str | None]:
     except Exception as exc:  # noqa: BLE001
         return [], str(exc)
     return foreign_keys, None
+
+
+def _clean_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _lower_blob(*values: object) -> str:
+    return " ".join(_clean_text(value).lower() for value in values if _clean_text(value))
+
+
+def _tokenize_business_text(*values: object) -> list[str]:
+    raw = _lower_blob(*values)
+    if not raw:
+        return []
+    tokens = [
+        token
+        for token in re.split(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", raw)
+        if len(token.strip()) >= 2
+    ]
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+    return deduped[:80]
+
+
+def _guess_table_role(table_meta: dict) -> str:
+    table_name = _clean_text(table_meta.get("table_name")).lower()
+    table_comment = _clean_text(table_meta.get("table_comment")).lower()
+    columns = table_meta.get("columns", []) if isinstance(table_meta.get("columns"), list) else []
+    column_names = {str(item.get("field_name") or item.get("column_name") or "").strip().lower() for item in columns if isinstance(item, dict)}
+    blob = _lower_blob(table_name, table_comment, " ".join(sorted(column_names)))
+
+    if any(token in blob for token in ("dict", "dictionary", "dim", "dimension", "lookup", "enum", "master", "reference", "字典", "维表", "主数据", "枚举")):
+        return "dictionary"
+    if any(token in table_name for token in ("rel_", "_rel", "map_", "_map", "mapping", "link", "bridge", "关系", "映射")):
+        return "relation"
+    if any(token in blob for token in ("fact", "transaction", "order", "detail", "record", "log", "流水", "明细", "记录", "订单", "事实")):
+        return "fact"
+    if {"id", "name"}.issubset(column_names) or {"code", "name"}.issubset(column_names):
+        return "master_data"
+    if any(name.endswith("id") for name in column_names) and len(column_names) <= 8:
+        return "lookup_candidate"
+    return "business_table"
+
+
+def _guess_field_role_hint(field_name: str, column_comment: str = "") -> str:
+    blob = _lower_blob(field_name, column_comment)
+    if any(token in blob for token in ("name", "title", "label", "display", "名称", "名字", "标题", "标签")):
+        return "display_value"
+    if any(token in blob for token in ("code", "key", "no", "number", "编码", "代码", "编号")):
+        return "business_key"
+    if any(token in blob for token in ("id", "主键")):
+        return "id_key"
+    if any(token in blob for token in ("type", "status", "category", "class", "group", "flag", "类型", "状态", "类目", "分类", "分组", "标记")):
+        return "controlled_dimension"
+    if any(token in blob for token in ("date", "time", "dt", "时间", "日期")):
+        return "time"
+    if any(token in blob for token in ("price", "amount", "qty", "count", "rate", "金额", "价格", "数量", "比例", "率")):
+        return "measure"
+    return ""
+
+
+def _schema_table_map(schema_tables: list[dict]) -> dict[str, dict]:
+    return {
+        str(item.get("table_name", "")).strip(): item
+        for item in schema_tables
+        if isinstance(item, dict) and str(item.get("table_name", "")).strip()
+    }
+
+
+def _field_meta(column_metadata: dict[str, dict[str, dict]], table_name: str, field_name: str) -> dict:
+    table_meta = column_metadata.get(table_name, {}) if isinstance(column_metadata, dict) else {}
+    if field_name in table_meta:
+        return table_meta[field_name]
+    lower_name = field_name.lower()
+    for key, value in table_meta.items():
+        if key.lower() == lower_name and isinstance(value, dict):
+            return value
+    return {}
+
+
+def _field_display_type(meta: dict, fallback: str = "") -> str:
+    return _clean_text(meta.get("column_type") or meta.get("field_type") or meta.get("data_type") or fallback).lower()
+
+
+def _build_dictionary_table_hints(schema_tables: list[dict], limit: int = 40) -> list[dict]:
+    hints: list[dict] = []
+    for table_meta in schema_tables:
+        if not isinstance(table_meta, dict):
+            continue
+        table_name = _clean_text(table_meta.get("table_name"))
+        table_role_hint = _clean_text(table_meta.get("table_role_hint"))
+        columns = table_meta.get("columns", []) if isinstance(table_meta.get("columns"), list) else []
+        if table_role_hint not in {"dictionary", "master_data", "lookup_candidate"}:
+            continue
+        label_columns: list[str] = []
+        key_columns: list[str] = []
+        control_columns: list[str] = []
+        for column in columns:
+            if not isinstance(column, dict):
+                continue
+            field_name = _clean_text(column.get("field_name") or column.get("column_name"))
+            role_hint = _guess_field_role_hint(field_name, _clean_text(column.get("column_comment")))
+            if role_hint == "display_value":
+                label_columns.append(field_name)
+            elif role_hint in {"business_key", "id_key"}:
+                key_columns.append(field_name)
+            elif role_hint == "controlled_dimension":
+                control_columns.append(field_name)
+        hints.append(
+            {
+                "table_name": table_name,
+                "table_comment": _clean_text(table_meta.get("table_comment")),
+                "table_role_hint": table_role_hint,
+                "label_columns": label_columns[:5],
+                "key_columns": key_columns[:5],
+                "control_columns": control_columns[:5],
+                "reason": "表名/注释/字段形态显示它可能是标准值、字典或主数据来源",
+            }
+        )
+    return hints[:limit]
+
+
+def _extract_table_candidate_names(raw_tables: object) -> list[str]:
+    if not isinstance(raw_tables, list):
+        return []
+    names: list[str] = []
+    for item in raw_tables:
+        if isinstance(item, str):
+            name = item.strip()
+        elif isinstance(item, dict):
+            name = _clean_text(item.get("table_name") or item.get("name") or item.get("table"))
+        else:
+            name = ""
+        if name:
+            names.append(name)
+    return names
+
+
+def _table_id_name_variants(table_name: str) -> set[str]:
+    compact = re.sub(r"[^0-9a-zA-Z]+", "", table_name).lower()
+    variants = {f"{compact}id"} if compact else set()
+    for suffix in ("info", "data", "detail", "details", "master", "dict", "dim", "table"):
+        if compact.endswith(suffix) and len(compact) > len(suffix):
+            variants.add(f"{compact[: -len(suffix)]}id")
+    if compact.endswith("s") and len(compact) > 1:
+        variants.add(f"{compact[:-1]}id")
+    return {item for item in variants if item and item != "id"}
+
+
+def _build_business_context(scene: SceneDTO, goal: str) -> dict:
+    sample_goals = [str(item).strip() for item in getattr(scene, "sample_goals", []) if str(item).strip()]
+    existing_fields = [
+        {
+            "table_name": item.table_name,
+            "field_name": item.field_name,
+            "semantic_name": item.semantic_name,
+            "description": item.description,
+            "role": item.role.value if hasattr(item.role, "value") else str(item.role),
+            "enabled": item.enabled,
+        }
+        for item in scene.fields
+    ]
+    existing_relations = [
+        {
+            "left_table": item.left_table,
+            "left_field": item.left_field,
+            "right_table": item.right_table,
+            "right_field": item.right_field,
+            "join_type": item.join_type,
+            "note": item.note,
+        }
+        for item in scene.relations
+    ]
+    analysis_goal = goal.strip() or "；".join(sample_goals[:3]) or scene.name
+    return {
+        "scene_name": scene.name,
+        "scene_description": scene.description,
+        "business_context": scene.description,
+        "analysis_goal": analysis_goal,
+        "user_goal": goal.strip(),
+        "sample_goals": sample_goals,
+        "existing_fields": existing_fields,
+        "existing_relations": existing_relations,
+    }
+
+
+def _select_schema_table_details(
+    schema_tables: list[dict],
+    table_names: list[str],
+    *,
+    max_tables: int,
+    max_fields_per_table: int,
+) -> list[dict]:
+    table_map = _schema_table_map(schema_tables)
+    ordered_names: list[str] = []
+    for name in table_names:
+        if name in table_map and name not in ordered_names:
+            ordered_names.append(name)
+    if len(ordered_names) < max_tables:
+        for item in schema_tables:
+            name = _clean_text(item.get("table_name")) if isinstance(item, dict) else ""
+            if name and name not in ordered_names:
+                ordered_names.append(name)
+            if len(ordered_names) >= max_tables:
+                break
+
+    details: list[dict] = []
+    for name in ordered_names[:max_tables]:
+        raw = copy.deepcopy(table_map.get(name, {}))
+        if not raw:
+            continue
+        columns = raw.get("columns", []) if isinstance(raw.get("columns"), list) else []
+        raw["columns"] = columns[:max_fields_per_table]
+        details.append(raw)
+    return details
+
+
+def _build_schema_summary(schema_tables: list[dict], relation_candidates: list[dict], dictionary_hints: list[dict]) -> dict:
+    role_names = sorted(
+        {
+            _clean_text(item.get("table_role_hint"))
+            for item in schema_tables
+            if isinstance(item, dict) and _clean_text(item.get("table_role_hint"))
+        }
+    )
+    return {
+        "table_count": len(schema_tables),
+        "field_count": sum(len(item.get("columns", []) or []) for item in schema_tables if isinstance(item, dict)),
+        "relation_candidate_count": len(relation_candidates),
+        "dictionary_table_count": len(dictionary_hints),
+        "table_role_counts": {
+            role: sum(
+                1
+                for item in schema_tables
+                if isinstance(item, dict) and _clean_text(item.get("table_role_hint")) == role
+            )
+            for role in role_names
+        },
+    }
 
 
 def _sql_ident(name: str) -> str:
@@ -232,19 +534,44 @@ def _build_schema_hint_candidates(
     foreign_keys: list[dict],
     max_tables: int,
     max_fields: int,
+    schema_tables: list[dict] | None = None,
+    column_metadata: dict[str, dict[str, dict]] | None = None,
+    goal: str = "",
 ) -> dict:
     existing_tables = {item.table_name for item in scene.fields}
+    schema_tables = schema_tables or []
+    column_metadata = column_metadata or {}
+    table_meta_map = _schema_table_map(schema_tables)
     table_pool = list(schema.keys())
+    business_tokens = _tokenize_business_text(scene.name, scene.description, goal, *getattr(scene, "sample_goals", []))
 
     def score_table(table: str) -> int:
         score = 0
         lower = table.lower()
+        table_meta = table_meta_map.get(table, {})
+        columns = table_meta.get("columns", []) if isinstance(table_meta.get("columns"), list) else []
+        table_blob = _lower_blob(
+            table,
+            table_meta.get("table_comment", ""),
+            " ".join(
+                _lower_blob(
+                    item.get("field_name", ""),
+                    item.get("column_comment", ""),
+                )
+                for item in columns
+                if isinstance(item, dict)
+            ),
+        )
         if table in existing_tables:
             score += 50
-        for token in [scene.name, scene.description]:
-            token_lower = token.lower().strip()
-            if token_lower and token_lower in lower:
-                score += 20
+        for token in business_tokens:
+            if token and token in table_blob:
+                score += 14
+        if _clean_text(table_meta.get("table_comment")):
+            score += 3
+        table_role_hint = _clean_text(table_meta.get("table_role_hint"))
+        if table_role_hint in {"dictionary", "master_data"}:
+            score += 4
         if "info" in lower:
             score += 5
         if "scene" in lower:
@@ -252,26 +579,64 @@ def _build_schema_hint_candidates(
         return score
 
     ranked_tables = sorted(table_pool, key=lambda t: score_table(t), reverse=True)[:max_tables]
+    table_candidates = []
+    for table in ranked_tables:
+        table_meta = table_meta_map.get(table, {})
+        table_candidates.append(
+            {
+                "table_name": table,
+                "table_comment": _clean_text(table_meta.get("table_comment")),
+                "table_role_hint": _clean_text(table_meta.get("table_role_hint")) or "business_table",
+                "field_count": len(schema.get(table, []) or []),
+                "selected": True,
+                "confidence": _clamp_confidence(0.55 + min(score_table(table), 45) / 100, default=0.65),
+                "reason": "根据场景业务描述、表名、字段名和注释综合召回",
+            }
+        )
 
     field_candidates: list[dict] = []
     for table in ranked_tables:
+        table_meta = table_meta_map.get(table, {})
+        table_role_hint = _clean_text(table_meta.get("table_role_hint")) or "business_table"
+        table_comment = _clean_text(table_meta.get("table_comment"))
         for col in schema.get(table, [])[:max_fields]:
+            meta = _field_meta(column_metadata, table, col)
             role = _guess_role(col).value
             semantic_name = _semantic_name(col)
+            column_comment = _clean_text(meta.get("column_comment"))
+            field_type = _field_display_type(meta, column_types.get(table, {}).get(col, ""))
+            field_role_hint = _guess_field_role_hint(col, column_comment)
+            reason_parts = ["基于数据库schema自动推荐"]
+            if column_comment:
+                reason_parts.append(f"字段注释: {column_comment}")
+            if table_comment:
+                reason_parts.append(f"表注释: {table_comment}")
+            if field_role_hint:
+                reason_parts.append(f"字段形态: {field_role_hint}")
+            if table_role_hint in {"dictionary", "master_data", "lookup_candidate"}:
+                reason_parts.append(f"可能来自受控值源: {table_role_hint}")
             field_candidates.append(
                 {
                     "candidate_id": _stable_candidate_id("fld", table, col, semantic_name),
                     "table_name": table,
                     "field_name": col,
                     "semantic_name": semantic_name,
-                    "description": f"auto from schema {table}.{col}",
+                    "description": column_comment or f"auto from schema {table}.{col}",
                     "role": role,
-                    "field_type": str(column_types.get(table, {}).get(col, "")).strip().lower(),
+                    "field_type": field_type,
+                    "column_type": field_type,
+                    "data_type": _clean_text(meta.get("data_type") or column_types.get(table, {}).get(col, "")).lower(),
+                    "column_comment": column_comment,
+                    "table_comment": table_comment,
+                    "table_role_hint": table_role_hint,
+                    "field_role_hint": field_role_hint,
+                    "is_primary": bool(meta.get("is_primary", False)),
+                    "is_nullable": bool(meta.get("is_nullable", True)),
                     "required": role in {"metric", "time"},
                     "selected": True,
                     "enabled": True,
                     "confidence": 0.65,
-                    "reason": "基于schema字段语义规则自动推荐",
+                    "reason": "；".join(reason_parts),
                 }
             )
 
@@ -302,6 +667,7 @@ def _build_schema_hint_candidates(
                     "right_field": child_column,
                     "join_type": "LEFT",
                     "cardinality": "1:N",
+                    "origin": "foreign_key",
                     "required": False,
                     "selected": True,
                     "reason": "来自数据库外键约束",
@@ -309,55 +675,36 @@ def _build_schema_hint_candidates(
             )
 
     for i, left_table in enumerate(ranked_tables):
-        left_cols = {c.lower() for c in schema.get(left_table, [])}
-        if "id" not in left_cols:
+        left_cols = {c.lower(): c for c in schema.get(left_table, [])}
+        left_id = left_cols.get("id") or left_cols.get("Id".lower())
+        if not left_id:
             continue
+        fk_name_variants = _table_id_name_variants(left_table)
         for right_table in ranked_tables[i + 1 :]:
             right_cols_raw = schema.get(right_table, [])
             right_cols = {c.lower(): c for c in right_cols_raw}
-            fk_name = f"{left_table.lower().replace('`', '')[:-5] if left_table.lower().endswith('_info') else left_table.lower()}id"
-            if fk_name in right_cols:
+            matched_fk_name = next((name for name in fk_name_variants if name in right_cols), "")
+            if matched_fk_name:
                 relation_candidates.append(
                     {
                         "candidate_id": _stable_candidate_id(
                             "rel",
                             left_table,
-                            "Id" if "id" in left_cols else "id",
+                            left_id,
                             right_table,
-                            right_cols[fk_name],
+                            right_cols[matched_fk_name],
                             "LEFT",
                         ),
                         "left_table": left_table,
-                        "left_field": "Id" if "id" in left_cols else "id",
+                        "left_field": left_id,
                         "right_table": right_table,
-                        "right_field": right_cols[fk_name],
+                        "right_field": right_cols[matched_fk_name],
                         "join_type": "LEFT",
                         "cardinality": "1:N",
+                        "origin": "naming_heuristic",
                         "required": False,
                         "selected": True,
-                        "reason": "通过 *_id 命名模式自动推断",
-                    }
-                )
-            elif "clothingid" in right_cols and "id" in left_cols:
-                relation_candidates.append(
-                    {
-                        "candidate_id": _stable_candidate_id(
-                            "rel",
-                            left_table,
-                            "Id",
-                            right_table,
-                            right_cols["clothingid"],
-                            "LEFT",
-                        ),
-                        "left_table": left_table,
-                        "left_field": "Id",
-                        "right_table": right_table,
-                        "right_field": right_cols["clothingid"],
-                        "join_type": "LEFT",
-                        "cardinality": "1:N",
-                        "required": False,
-                        "selected": True,
-                        "reason": "通过 ClothingId 命名模式自动推断",
+                        "reason": f"通过实体ID命名模式自动推断: {right_table}.{right_cols[matched_fk_name]} -> {left_table}.{left_id}",
                     }
                 )
 
@@ -382,7 +729,7 @@ def _build_schema_hint_candidates(
         dedup_relations.append(relation)
 
     return {
-        "tables": ranked_tables,
+        "tables": table_candidates,
         "fields": field_candidates,
         "relations": dedup_relations,
         "metric_templates": [],
@@ -401,7 +748,29 @@ def _normalize_candidates(candidates: dict) -> dict:
 
     for table in candidates.get("tables", []) or []:
         if isinstance(table, str) and table.strip():
-            normalized["tables"].append(table.strip())
+            normalized["tables"].append(
+                {
+                    "table_name": table.strip(),
+                    "selected": True,
+                    "confidence": 0.5,
+                    "reason": "",
+                }
+            )
+        elif isinstance(table, dict):
+            table_name = _clean_text(table.get("table_name") or table.get("name") or table.get("table"))
+            if not table_name:
+                continue
+            normalized["tables"].append(
+                {
+                    "table_name": table_name,
+                    "table_comment": _clean_text(table.get("table_comment") or table.get("comment")),
+                    "table_role_hint": _clean_text(table.get("table_role_hint") or table.get("role_hint")),
+                    "field_count": int(table.get("field_count") or 0),
+                    "selected": _to_bool(table.get("selected", True), default=True),
+                    "confidence": _clamp_confidence(table.get("confidence", 0.5), default=0.5),
+                    "reason": _clean_text(table.get("reason") or table.get("note")),
+                }
+            )
 
     semantic_targets: dict[str, tuple[str, str]] = {}
     for item in candidates.get("fields", []) or []:
@@ -431,6 +800,15 @@ def _normalize_candidates(candidates: dict) -> dict:
                 "description": str(item.get("description", "")).strip(),
                 "role": role,
                 "field_type": str(item.get("field_type", item.get("column_type", ""))).strip().lower(),
+                "column_type": str(item.get("column_type", item.get("field_type", ""))).strip().lower(),
+                "data_type": str(item.get("data_type", item.get("field_type", ""))).strip().lower(),
+                "column_comment": _clean_text(item.get("column_comment") or item.get("comment")),
+                "table_comment": _clean_text(item.get("table_comment")),
+                "table_role_hint": _clean_text(item.get("table_role_hint") or item.get("table_type")),
+                "field_role_hint": _clean_text(item.get("field_role_hint") or item.get("value_role_hint")),
+                "value_source_hint": item.get("value_source_hint") if isinstance(item.get("value_source_hint"), dict) else {},
+                "is_primary": _to_bool(item.get("is_primary", False), default=False),
+                "is_nullable": _to_bool(item.get("is_nullable", True), default=True),
                 "required": _to_bool(item.get("required", False), default=False),
                 "selected": _to_bool(item.get("selected", item.get("enabled", True)), default=True),
                 "enabled": _to_bool(item.get("enabled", item.get("selected", True)), default=True),
@@ -460,6 +838,7 @@ def _normalize_candidates(candidates: dict) -> dict:
                 "right_field": right_field,
                 "join_type": str(item.get("join_type", "LEFT")).strip().upper() or "LEFT",
                 "cardinality": str(item.get("cardinality", "1:N")).strip().upper() or "1:N",
+                "origin": _clean_text(item.get("origin") or item.get("source") or item.get("relation_source")),
                 "required": _to_bool(item.get("required", False), default=False),
                 "selected": _to_bool(item.get("selected", True), default=True),
                 "confidence": _clamp_confidence(item.get("confidence", 0.5), default=0.5),
@@ -489,6 +868,8 @@ class LlmAgentService:
         "fetched_at": 0.0,
         "schema": {},
         "column_types": {},
+        "schema_tables": [],
+        "column_metadata": {},
         "foreign_keys": [],
         "schema_error": None,
         "foreign_key_error": None,
@@ -516,9 +897,11 @@ class LlmAgentService:
                 and (now - fetched_at) <= self.schema_cache_ttl_seconds
             ):
                 return {
-                    "schema": dict(self._schema_cache.get("schema", {})),
-                    "column_types": dict(self._schema_cache.get("column_types", {})),
-                    "foreign_keys": list(self._schema_cache.get("foreign_keys", [])),
+                    "schema": copy.deepcopy(self._schema_cache.get("schema", {})),
+                    "column_types": copy.deepcopy(self._schema_cache.get("column_types", {})),
+                    "schema_tables": copy.deepcopy(self._schema_cache.get("schema_tables", [])),
+                    "column_metadata": copy.deepcopy(self._schema_cache.get("column_metadata", {})),
+                    "foreign_keys": copy.deepcopy(self._schema_cache.get("foreign_keys", [])),
                     "schema_error": self._schema_cache.get("schema_error"),
                     "foreign_key_error": self._schema_cache.get("foreign_key_error"),
                     "cache_hit": True,
@@ -529,7 +912,7 @@ class LlmAgentService:
                     "last_refresh_error": self._schema_cache.get("last_refresh_error"),
                 }
 
-        schema, column_types, schema_error = _safe_fetch_schema()
+        schema, column_types, schema_tables, column_metadata, schema_error = _safe_fetch_schema()
         foreign_keys, foreign_key_error = _safe_fetch_foreign_keys()
         refresh_error = None
         if schema_error or foreign_key_error:
@@ -537,19 +920,25 @@ class LlmAgentService:
 
         refreshed_at = time.time()
         with self._cache_lock:
-            previous_schema = dict(self._schema_cache.get("schema", {}))
-            previous_column_types = dict(self._schema_cache.get("column_types", {}))
-            previous_foreign_keys = list(self._schema_cache.get("foreign_keys", []))
+            previous_schema = copy.deepcopy(self._schema_cache.get("schema", {}))
+            previous_column_types = copy.deepcopy(self._schema_cache.get("column_types", {}))
+            previous_schema_tables = copy.deepcopy(self._schema_cache.get("schema_tables", []))
+            previous_column_metadata = copy.deepcopy(self._schema_cache.get("column_metadata", {}))
+            previous_foreign_keys = copy.deepcopy(self._schema_cache.get("foreign_keys", []))
             previous_fetched_at = float(self._schema_cache.get("fetched_at", 0.0) or 0.0)
 
             # If DB refresh fails, keep last successful payload as fallback and expose refresh error.
             if not schema_error and schema:
                 self._schema_cache["schema"] = schema
                 self._schema_cache["column_types"] = column_types
+                self._schema_cache["schema_tables"] = schema_tables
+                self._schema_cache["column_metadata"] = column_metadata
                 self._schema_cache["fetched_at"] = refreshed_at
             elif not previous_schema:
                 self._schema_cache["schema"] = schema
                 self._schema_cache["column_types"] = column_types
+                self._schema_cache["schema_tables"] = schema_tables
+                self._schema_cache["column_metadata"] = column_metadata
                 self._schema_cache["fetched_at"] = refreshed_at
 
             if not foreign_key_error:
@@ -564,14 +953,18 @@ class LlmAgentService:
             self._schema_cache["last_refresh_at"] = refreshed_at
             self._schema_cache["last_refresh_error"] = refresh_error
 
-            merged_schema = dict(self._schema_cache.get("schema", previous_schema))
-            merged_column_types = dict(self._schema_cache.get("column_types", previous_column_types))
-            merged_foreign_keys = list(self._schema_cache.get("foreign_keys", previous_foreign_keys))
+            merged_schema = copy.deepcopy(self._schema_cache.get("schema", previous_schema))
+            merged_column_types = copy.deepcopy(self._schema_cache.get("column_types", previous_column_types))
+            merged_schema_tables = copy.deepcopy(self._schema_cache.get("schema_tables", previous_schema_tables))
+            merged_column_metadata = copy.deepcopy(self._schema_cache.get("column_metadata", previous_column_metadata))
+            merged_foreign_keys = copy.deepcopy(self._schema_cache.get("foreign_keys", previous_foreign_keys))
             merged_fetched_at = float(self._schema_cache.get("fetched_at", previous_fetched_at) or 0.0)
             cache_age_seconds = max(0, int(refreshed_at - merged_fetched_at)) if merged_fetched_at else None
             return {
                 "schema": merged_schema,
                 "column_types": merged_column_types,
+                "schema_tables": merged_schema_tables,
+                "column_metadata": merged_column_metadata,
                 "foreign_keys": merged_foreign_keys,
                 "schema_error": schema_error,
                 "foreign_key_error": foreign_key_error,
@@ -619,30 +1012,95 @@ class LlmAgentService:
         metadata = self._load_db_metadata(force_refresh=False)
         schema = metadata.get("schema", {})
         column_types = metadata.get("column_types", {})
+        schema_tables_detail = metadata.get("schema_tables", [])
         foreign_keys = metadata.get("foreign_keys", [])
 
         tables: list[dict] = []
-        for table_name in sorted(schema.keys()):
-            columns = schema.get(table_name, []) or []
-            tables.append(
-                {
-                    "table_name": table_name,
-                    "fields": [
-                        {
-                            "field_name": field_name,
-                            "field_type": str(column_types.get(table_name, {}).get(field_name, "")).strip().lower(),
-                        }
-                        for field_name in columns
-                    ],
-                }
-            )
+        if isinstance(schema_tables_detail, list) and schema_tables_detail:
+            for table_meta in schema_tables_detail:
+                if not isinstance(table_meta, dict):
+                    continue
+                table_name = _clean_text(table_meta.get("table_name"))
+                columns = table_meta.get("columns", []) if isinstance(table_meta.get("columns"), list) else []
+                tables.append(
+                    {
+                        "table_name": table_name,
+                        "table_comment": _clean_text(table_meta.get("table_comment")),
+                        "table_role_hint": _clean_text(table_meta.get("table_role_hint")) or "business_table",
+                        "fields": [
+                            {
+                                "field_name": _clean_text(column.get("field_name") or column.get("column_name")),
+                                "field_type": _clean_text(column.get("field_type") or column.get("data_type")).lower(),
+                                "column_type": _clean_text(column.get("column_type")).lower(),
+                                "ordinal_position": int(column.get("ordinal_position") or 0),
+                                "is_nullable": bool(column.get("is_nullable", True)),
+                                "is_primary": bool(column.get("is_primary", False)),
+                                "column_comment": _clean_text(column.get("column_comment")),
+                                "field_role_hint": _guess_field_role_hint(
+                                    _clean_text(column.get("field_name") or column.get("column_name")),
+                                    _clean_text(column.get("column_comment")),
+                                ),
+                            }
+                            for column in columns
+                            if isinstance(column, dict)
+                        ],
+                    }
+                )
+        else:
+            for table_name in sorted(schema.keys()):
+                columns = schema.get(table_name, []) or []
+                tables.append(
+                    {
+                        "table_name": table_name,
+                        "table_comment": "",
+                        "table_role_hint": "business_table",
+                        "fields": [
+                            {
+                                "field_name": field_name,
+                                "field_type": str(column_types.get(table_name, {}).get(field_name, "")).strip().lower(),
+                                "column_type": str(column_types.get(table_name, {}).get(field_name, "")).strip().lower(),
+                                "ordinal_position": idx + 1,
+                                "is_nullable": True,
+                                "is_primary": False,
+                                "column_comment": "",
+                                "field_role_hint": _guess_field_role_hint(field_name, ""),
+                            }
+                            for idx, field_name in enumerate(columns)
+                        ],
+                    }
+                )
+
+        relation_candidates = [
+            {
+                "left_table": _clean_text(fk.get("parent_table")),
+                "left_field": _clean_text(fk.get("parent_column")),
+                "right_table": _clean_text(fk.get("child_table")),
+                "right_field": _clean_text(fk.get("child_column")),
+                "join_type": "LEFT",
+                "cardinality": "1:N",
+                "origin": "foreign_key",
+                "confidence": 0.9,
+                "reason": "来自数据库外键约束",
+            }
+            for fk in foreign_keys
+            if isinstance(fk, dict)
+        ]
+        dictionary_table_hints = _build_dictionary_table_hints(schema_tables_detail if isinstance(schema_tables_detail, list) else [])
 
         return {
             "ok": not bool(metadata.get("schema_error")),
             "tables": tables,
             "foreign_keys": foreign_keys,
+            "relation_candidates": relation_candidates,
+            "dictionary_table_hints": dictionary_table_hints,
             "schema_tables": len(tables),
+            "schema_table_count": len(tables),
             "foreign_key_count": len(foreign_keys),
+            "schema_summary": _build_schema_summary(
+                schema_tables_detail if isinstance(schema_tables_detail, list) else [],
+                relation_candidates,
+                dictionary_table_hints,
+            ),
             "cache_hit": metadata.get("cache_hit", False),
             "cache_ttl_seconds": metadata.get("ttl_seconds", self.schema_cache_ttl_seconds),
             "cache_age_seconds": metadata.get("cache_age_seconds"),
@@ -664,6 +1122,8 @@ class LlmAgentService:
         metadata = self._load_db_metadata(force_refresh=False)
         schema = metadata.get("schema", {})
         column_types = metadata.get("column_types", {})
+        schema_tables = metadata.get("schema_tables", [])
+        column_metadata = metadata.get("column_metadata", {})
         foreign_keys = metadata.get("foreign_keys", [])
         schema_error = metadata.get("schema_error")
         foreign_key_error = metadata.get("foreign_key_error")
@@ -674,22 +1134,51 @@ class LlmAgentService:
             foreign_keys=foreign_keys,
             max_tables=max_tables,
             max_fields=max_fields_per_table,
+            schema_tables=schema_tables if isinstance(schema_tables, list) else [],
+            column_metadata=column_metadata if isinstance(column_metadata, dict) else {},
+            goal=goal,
+        )
+        table_names = _extract_table_candidate_names(schema_hints.get("tables"))
+        schema_table_details = _select_schema_table_details(
+            schema_tables if isinstance(schema_tables, list) else [],
+            table_names,
+            max_tables=max(max_tables * 2, max_tables),
+            max_fields_per_table=max_fields_per_table,
+        )
+        dictionary_table_hints = _build_dictionary_table_hints(schema_tables if isinstance(schema_tables, list) else [])
+        business_context = _build_business_context(scene, goal)
+        schema_summary = _build_schema_summary(
+            schema_tables if isinstance(schema_tables, list) else [],
+            schema_hints.get("relations", []) if isinstance(schema_hints.get("relations"), list) else [],
+            dictionary_table_hints,
         )
 
         payload = {
             "scene": scene.model_dump(mode="json"),
             "goal": goal,
+            "business_context": business_context,
+            "analysis_goal": business_context["analysis_goal"],
             "schema": schema,
             "schema_column_types": column_types,
+            "schema_tables": schema_table_details,
+            "schema_summary": schema_summary,
+            "foreign_keys": foreign_keys,
+            "relation_candidates": schema_hints.get("relations", []),
+            "dictionary_table_hints": dictionary_table_hints,
             "fallback_candidates": schema_hints,
-            "instruction": "请为场景剧本草拟推荐候选 tables / fields / relations，并包含字段类型列表。",
+            "instruction": "请基于业务输入、information_schema 元数据、关系候选和 fallback_candidates 推荐待人工筛选的 tables / fields / relations。",
         }
 
         provider_notes: list[str] = []
         try:
             llm_result = self.client.recommend(payload)
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"configuration recommendation LLM failed: {exc}") from exc
+            llm_result = {
+                "provider": "local",
+                "mode": "schema_fallback",
+                "candidates": schema_hints,
+                "notes": [f"configuration recommendation LLM failed, used schema fallback: {exc}"],
+            }
 
         remote_candidates = llm_result.get("candidates") if isinstance(llm_result, dict) else None
         if not isinstance(remote_candidates, dict) or not remote_candidates:
@@ -718,6 +1207,9 @@ class LlmAgentService:
             "goal": goal,
             "candidates": normalized,
             "field_type_list": field_type_list,
+            "business_context": business_context,
+            "schema_summary": schema_summary,
+            "dictionary_table_hints": dictionary_table_hints,
             "notes": provider_notes,
         }
 
@@ -789,7 +1281,7 @@ class LlmAgentService:
         if not selected_fields:
             add_issue("error", "empty_fields", "at least one selected candidate field is required", "candidates.fields")
 
-        candidate_tables = set(candidates.get("tables", []))
+        candidate_tables = set(_extract_table_candidate_names(candidates.get("tables", [])))
         for item in selected_fields:
             candidate_tables.add(item.get("table_name", ""))
         for item in selected_relations:

@@ -116,6 +116,9 @@ async def generate_candidates(scene_id: str, body: GenerateCandidatesRequest) ->
             "mode": rec.get("mode", "local"),
             "table_candidates": candidates.get("tables", []),
             "field_type_list": rec.get("field_type_list", []),
+            "business_context": rec.get("business_context", {}),
+            "schema_summary": rec.get("schema_summary", {}),
+            "dictionary_table_hints": rec.get("dictionary_table_hints", []),
         },
     }
     recommendation = {
@@ -127,6 +130,9 @@ async def generate_candidates(scene_id: str, body: GenerateCandidatesRequest) ->
         "goal": payload["goal"],
         "notes": payload["notes"],
         "field_type_list": payload["meta"]["field_type_list"],
+        "business_context": payload["meta"]["business_context"],
+        "schema_summary": payload["meta"]["schema_summary"],
+        "dictionary_table_hints": payload["meta"]["dictionary_table_hints"],
         "candidates": {
             "tables": payload["meta"]["table_candidates"],
             "fields": payload["field_candidates"],

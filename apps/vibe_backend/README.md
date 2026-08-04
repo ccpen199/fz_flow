@@ -46,27 +46,42 @@ POST /api/v1/llm-agent/scenes/{scene_id}/publish
 LLM-agent 环境变量（可选）：
 
 ```bash
-# Configuration-center LLM runtime.
-LLM_AGENT_PROVIDER=modelscope
-LLM_AGENT_HTTP_ENDPOINT=https://.../v1/chat/completions
+LLM_AGENT_PROVIDER=heuristic|http|modelscope|codex|codex_cli
+LLM_AGENT_HTTP_ENDPOINT=http://...
 LLM_AGENT_API_KEY=...
-LLM_AGENT_HTTP_MODEL=gpt-5.2
-LLM_AGENT_HTTP_TIMEOUT=90
-
-# SQL generation LLM runtime.
-SQL_RESULT_AGENT_PROVIDER=modelscope
-SQL_RESULT_AGENT_HTTP_ENDPOINT=https://.../v1/chat/completions
-SQL_RESULT_AGENT_API_KEY=...
-SQL_RESULT_AGENT_HTTP_MODEL=gpt-5.2
-SQL_RESULT_AGENT_HTTP_TIMEOUT=90
+LLM_AGENT_HTTP_MODEL=Qwen/Qwen3-235B-A22B-Instruct-2507
+LLM_AGENT_HTTP_TIMEOUT=30
 LLM_AGENT_SCHEMA_CACHE_TTL_SECONDS=300
 SCENE_CACHE_TTL_SECONDS=300
+
+# 当 provider=codex/codex_cli 时生效
+LLM_AGENT_CODEX_BIN=codex
+LLM_AGENT_CODEX_MODEL=gpt-5
+LLM_AGENT_CODEX_HOME=/path/to/provider-home
+LLM_AGENT_CODEX_HOME_FALLBACKS=/path/to/fallback-home-1,/path/to/fallback-home-2
+LLM_AGENT_CODEX_CWD=/path/to/repo
+LLM_AGENT_CODEX_BYPASS_SANDBOX=0
+
+# SQL 结果 agent
+SQL_RESULT_AGENT_PROVIDER=codex|codex_cli|http|modelscope
+SQL_RESULT_AGENT_HTTP_ENDPOINT=https://...
+SQL_RESULT_AGENT_API_KEY=...
+SQL_RESULT_AGENT_HTTP_MODEL=Qwen/Qwen3-235B-A22B-Instruct-2507
+SQL_RESULT_AGENT_CODEX_HOME=/path/to/provider-home
+SQL_RESULT_AGENT_CODEX_HOME_FALLBACKS=/path/to/fallback-home-1,/path/to/fallback-home-2
 ```
 
-Runtime note: `/api/v1/llm-agent/.../recommend` uses `LLM_AGENT_*`
-when set, otherwise falls back to `SQL_RESULT_AGENT_*`.
-`/api/v1/sql-result-agent/.../generate-and-run` uses `SQL_RESULT_AGENT_*`.
-Codex CLI is not a supported runtime provider in this project.
+示例（gmn 失败自动切到 aixj_vip）：
+
+```bash
+LLM_AGENT_PROVIDER=codex_cli
+LLM_AGENT_CODEX_HOME=/path/codex_gmn
+LLM_AGENT_CODEX_HOME_FALLBACKS=/path/codex_aixj_vip
+
+SQL_RESULT_AGENT_PROVIDER=codex_cli
+SQL_RESULT_AGENT_CODEX_HOME=/path/codex_gmn
+SQL_RESULT_AGENT_CODEX_HOME_FALLBACKS=/path/codex_aixj_vip
+```
 
 本地启动：
 

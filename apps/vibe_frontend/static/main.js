@@ -1335,6 +1335,14 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function renderTitleCell(value, className = "", titleValue = value) {
+  const text = String(value ?? "");
+  const titleText = String(titleValue ?? text);
+  const classes = className ? ` class="${className}"` : "";
+  const title = titleText ? ` title="${escapeHtml(titleText)}"` : "";
+  return `<td${classes}${title}>${escapeHtml(text)}</td>`;
+}
+
 function splitAliases(value) {
   return String(value || "")
     .split(",")
@@ -1439,8 +1447,17 @@ function renderSceneRelationsTable(relations) {
   const body = relations
     .map((row) => {
       const relationId = escapeHtml(row.relation_id || "");
-      const cells = columns.map((column) => `<td>${escapeHtml(row[column] ?? "")}</td>`).join("");
-      return `<tr class="previewable-row" data-preview-title="已配置关系详情" data-preview-payload="${encodeRowPayload(row)}">${cells}<td><button class="secondary relation-delete-btn" data-relation-id="${relationId}">删除</button></td></tr>`;
+      const relationExpr = `${row.left_table || ""}.${row.left_field || ""} = ${row.right_table || ""}.${row.right_field || ""}`;
+      const noteText = row.note || "";
+      const cells = [
+        renderTitleCell(row.left_table || "", "hover-tip-cell", relationExpr),
+        renderTitleCell(row.left_field || "", "hover-tip-cell", relationExpr),
+        renderTitleCell(row.right_table || "", "hover-tip-cell", relationExpr),
+        renderTitleCell(row.right_field || "", "hover-tip-cell", relationExpr),
+        renderTitleCell(row.join_type || "", "hover-tip-cell", relationExpr),
+        renderTitleCell(noteText, "hover-tip-cell", noteText),
+      ].join("");
+      return `<tr class="previewable-row" title="${escapeHtml(`${relationExpr}${noteText ? ` · ${noteText}` : ""}`)}" data-preview-title="已配置关系详情" data-preview-payload="${encodeRowPayload(row)}">${cells}<td><button class="secondary relation-delete-btn" data-relation-id="${relationId}">删除</button></td></tr>`;
     })
     .join("");
   return `${renderFixedTableOpen(["sticky-actions-1", "uniform-list-table"], [88, 88, 88, 88, 72, 88, 52])}<thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
@@ -1475,10 +1492,12 @@ function renderSelectedDraftTable(kind, rows) {
     .map((item) => {
       const candidateId = escapeHtml(item.candidate_id || "");
       const requiredText = item.required ? "true" : "false";
-      return `<tr class="previewable-row" data-preview-title="已选关系详情" data-preview-payload="${encodeRowPayload(item)}">
-        <td>${escapeHtml(`${item.left_table || ""}.${item.left_field || ""} = ${item.right_table || ""}.${item.right_field || ""}`)}</td>
-        <td>${escapeHtml(item.join_type || "")}</td>
-        <td>${escapeHtml(item.cardinality || "")}</td>
+      const relationExpr = `${item.left_table || ""}.${item.left_field || ""} = ${item.right_table || ""}.${item.right_field || ""}`;
+      const noteText = item.note || item.reason || "";
+      return `<tr class="previewable-row" title="${escapeHtml(`${relationExpr}${noteText ? ` · ${noteText}` : ""}`)}" data-preview-title="已选关系详情" data-preview-payload="${encodeRowPayload(item)}">
+        ${renderTitleCell(relationExpr, "hover-tip-cell")}
+        ${renderTitleCell(item.join_type || "", "hover-tip-cell")}
+        ${renderTitleCell(item.cardinality || "", "hover-tip-cell")}
         <td>${escapeHtml(requiredText)}</td>
         <td>${escapeHtml(formatConfidence(item.confidence))}</td>
         <td><button class="secondary selected-draft-remove-btn" data-kind="relation" data-candidate-id="${candidateId}">剔除</button></td>
@@ -1811,15 +1830,18 @@ function renderLlmCandidateTable(kind, rows) {
       .map((item) => {
         const checked = item.selected !== false ? "checked" : "";
         const requiredText = item.required ? "true" : "false";
+        const relationExpr = `${item.left_table || ""}.${item.left_field || ""} = ${item.right_table || ""}.${item.right_field || ""}`;
+        const sourceText = formatCandidateMeta(item);
+        const reasonText = item.reason || item.note || "";
         return `<tr class="previewable-row" data-preview-title="关系候选详情" data-preview-payload="${encodeRowPayload(item)}">
           <td><input class="llm-candidate-check" type="checkbox" data-kind="relation" data-candidate-id="${escapeHtml(item.candidate_id || "")}" ${checked} /></td>
-          <td>${escapeHtml(`${item.left_table || ""}.${item.left_field || ""} = ${item.right_table || ""}.${item.right_field || ""}`)}</td>
-          <td>${escapeHtml(item.join_type || "")}</td>
-          <td>${escapeHtml(item.cardinality || "")}</td>
-          <td>${escapeHtml(formatCandidateMeta(item))}</td>
+          ${renderTitleCell(relationExpr, "hover-tip-cell")}
+          ${renderTitleCell(item.join_type || "", "hover-tip-cell")}
+          ${renderTitleCell(item.cardinality || "", "hover-tip-cell")}
+          ${renderTitleCell(sourceText, "hover-tip-cell")}
           <td>${escapeHtml(requiredText)}</td>
           <td>${escapeHtml(formatConfidence(item.confidence))}</td>
-          <td>${escapeHtml(item.reason || item.note || "")}</td>
+          ${renderTitleCell(reasonText, "hover-tip-cell")}
         </tr>`;
       })
       .join("") +

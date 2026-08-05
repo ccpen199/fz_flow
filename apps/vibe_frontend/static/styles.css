@@ -1867,6 +1867,10 @@ button:disabled {
   width: 18%;
 }
 
+[data-tab-panel="config"] .hover-tip-cell {
+  cursor: help;
+}
+
 [data-tab-panel="config"] .selected-draft-field-table {
   min-width: 560px;
 }

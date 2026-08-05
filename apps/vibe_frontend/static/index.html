@@ -568,6 +568,22 @@
 优衣库中国和日本最近30天价格带分布
 各品牌在不同二级类目的价格区间占比
 最近30天各平台上新SKU数趋势</pre>
+        <p><strong>如果 LLM 推荐不全或不准</strong>：直接用底部“场景语义配置区”手工补字段和关系。手工项会进入当前场景，后续推荐和查询都会沿用，不用等 LLM 再猜一次。</p>
+        <pre class="guide-pre">手工新增字段示例：
+语义名：品牌字典名称
+table_name：dict_brand
+field_name：Name
+role：dimension
+说明：用于区分品牌的中国 / 日本 / 其他版本。
+
+手工新增关系示例：
+left_table：clothing_info
+left_field：BrandName
+right_table：dict_brand
+right_field：Name
+join_type：LEFT
+note：品牌名称映射，后续推荐时优先复用。</pre>
+        <p>如果你的库不是按 <code>Name</code> / <code>Code</code> 组织，把上面的表名和字段名换成你库里的真实字段就行。</p>
       </div>
     </dialog>
     <script src="./main.js?v=20260804-config-flow-help"></script>

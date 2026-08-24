@@ -16,6 +16,7 @@ from .routers.semantic_cache import router as semantic_cache_router
 from .routers.scenes import router as scenes_router, warm_scene_cache
 from .routers.slides import router as slides_router
 from .routers.sql_result_agent import router as sql_result_agent_router
+from .services.dictionary_view_bootstrap import dictionary_view_bootstrap
 from .store import load_state
 
 app = FastAPI(title="Vibe Data Analysis Backend", version="0.1.0")
@@ -47,6 +48,7 @@ app.include_router(sql_result_agent_router)
 
 @app.on_event("startup")
 async def startup_load_state() -> None:
+    dictionary_view_bootstrap.ensure()
     load_state()
     warm_scene_cache()
 

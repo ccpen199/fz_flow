@@ -6,6 +6,7 @@ from .routers.admin import router as admin_router
 from .routers.artifacts import router as artifacts_router
 from .routers.bridge import router as bridge_router
 from .routers.clothing import router as clothing_router
+from .routers.config_transfer import router as config_transfer_router
 from .routers.decks import router as decks_router
 from .routers.llm_agent import router as llm_agent_router
 from .routers.memory import router as memory_router
@@ -39,6 +40,7 @@ app.include_router(preferences_router)
 app.include_router(memory_router)
 app.include_router(bridge_router)
 app.include_router(clothing_router)
+app.include_router(config_transfer_router)
 app.include_router(admin_router)
 app.include_router(sql_result_agent_router)
 

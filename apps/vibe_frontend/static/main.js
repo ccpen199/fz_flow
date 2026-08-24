@@ -3079,6 +3079,75 @@ async function refreshSceneDetail() {
   renderPriceBandModeControl();
 }
 
+function formatConfigTransferCounts(counts = {}) {
+  return `字段 ${Number(counts.fields || 0)}，关系 ${Number(counts.relations || 0)}，语义字段 ${Number(counts.semantic_fields || 0)}`;
+}
+
+async function exportCurrentSceneConfig() {
+  const sceneId = String(state.currentSceneId || "").trim();
+  if (!sceneId) throw new Error("请先选择场景");
+  const bundle = await api(`/api/v1/config-transfer/scenes/${encodeURIComponent(sceneId)}/export`);
+  const sceneName = String(bundle?.scene?.name || sceneId).trim();
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${sceneName.replace(/[^\w\u4e00-\u9fff-]+/g, "_") || sceneId}-config.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setCreateSceneHint(`已导出配置：${sceneName}。文件包含当前场景字段、ER关系和语义字段。`);
+}
+
+async function importSceneConfigFile(file) {
+  if (!file) return;
+  let bundle;
+  try {
+    bundle = JSON.parse(await file.text());
+  } catch (_error) {
+    throw new Error("导入失败：配置文件不是有效 JSON");
+  }
+  const mode = el("sceneConfigImportMode")?.value || "create";
+  const targetSceneId = mode === "create" ? null : String(state.currentSceneId || "").trim();
+  if (mode !== "create" && !targetSceneId) {
+    throw new Error("合并或覆盖前请先选择目标场景");
+  }
+  const preview = await api("/api/v1/config-transfer/preview", {
+    method: "POST",
+    body: JSON.stringify({
+      bundle,
+      target_scene_id: targetSceneId,
+      mode,
+    }),
+  });
+  const sourceName = preview?.source_scene?.name || "未命名场景";
+  const targetName = preview?.target_scene?.name || "新场景";
+  const countText = formatConfigTransferCounts(preview?.counts);
+  const warning = Array.isArray(preview?.warnings) ? preview.warnings.join("\n") : "";
+  const confirmed = window.confirm(
+    `确认导入配置？\n来源：${sourceName}\n目标：${targetName}\n${countText}\n\n${warning}`,
+  );
+  if (!confirmed) return;
+  const result = await api("/api/v1/config-transfer/import", {
+    method: "POST",
+    body: JSON.stringify({
+      bundle,
+      target_scene_id: targetSceneId,
+      mode,
+    }),
+  });
+  const importedSceneId = String(result?.scene_id || targetSceneId || "").trim();
+  if (importedSceneId) state.currentSceneId = importedSceneId;
+  await refreshScenes({ loadDetail: true, loadHistory: false });
+  if (importedSceneId) {
+    state.currentSceneId = importedSceneId;
+    await refreshSceneDetail();
+  }
+  setCreateSceneHint(`配置导入完成：${result?.scene_name || sourceName}。${formatConfigTransferCounts(result?.counts)}`);
+}
+
+
 async function recommendSceneByLlm() {
   if (!state.currentSceneId) throw new Error("未选择场景");
   const goal = (el("llmGoal")?.value || "").trim();
@@ -4067,6 +4136,16 @@ function bind() {
   });
   el("llmRecommendBtn").onclick = () => run(() => withAgentWait("recommend", "推荐 Agent", recommendSceneByLlm));
   el("llmImportBtn").onclick = () => run(applySceneDraftFromLlm);
+  el("exportSceneConfigBtn").onclick = () => run(exportCurrentSceneConfig);
+  el("importSceneConfigBtn").onclick = () => el("sceneConfigFileInput").click();
+  el("sceneConfigFileInput").addEventListener("change", (event) => {
+    const input = event.target;
+    const file = input instanceof HTMLInputElement ? input.files?.[0] : null;
+    if (!file) return;
+    run(() => importSceneConfigFile(file)).finally(() => {
+      input.value = "";
+    });
+  });
   if (el("llmSqlResultBtn")) {
     el("llmSqlResultBtn").onclick = () =>
       run(() => withAgentWait("sqlResult", "SQL 结果 Agent", runSqlResultAgentFromConfig));

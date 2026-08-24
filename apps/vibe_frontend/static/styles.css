@@ -1430,6 +1430,14 @@ select {
   font-size: 12px;
 }
 
+.compact-actions select.compact-select {
+  width: 132px;
+  min-height: 28px;
+  margin-bottom: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
 .muted {
   color: var(--text-muted);
 }

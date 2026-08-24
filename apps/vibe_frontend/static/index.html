@@ -133,6 +133,14 @@
                   <button id="refreshDbCacheBtn" class="secondary" title="读取数据库并刷新缓存">DB缓存</button>
                   <button id="llmRecommendBtn" class="secondary" title="LLM Recommend">推荐</button>
                   <button id="llmImportBtn" title="导入勾选候选">导入勾选</button>
+                  <select id="sceneConfigImportMode" class="compact-select" title="配置文件导入方式">
+                    <option value="create">导入为新场景</option>
+                    <option value="merge">合并到当前场景</option>
+                    <option value="replace">覆盖当前场景</option>
+                  </select>
+                  <button id="exportSceneConfigBtn" class="secondary" title="导出当前场景字段、关系和语义配置">导出配置</button>
+                  <button id="importSceneConfigBtn" class="secondary" title="从配置文件导入字段、关系和语义配置">导入配置</button>
+                  <input id="sceneConfigFileInput" type="file" accept=".json,application/json" hidden />
                   <button id="llmSqlResultBtn" title="切到查询执行并生成SQL+结果">SQL与结果</button>
                 </div>
               </div>
@@ -563,6 +571,7 @@
 
 补充类目结构分析配置，优先推荐一级类目、二级类目、叶子类目和类目字典关系。</pre>
         <p><strong>怎么判断结果</strong>：推荐结果只是候选，不会直接生效。字段和关系进入“已选列表”后，还要点击“导入勾选”，才会写入当前场景配置。</p>
+        <p><strong>配置迁移</strong>：点击“导出配置”会生成 JSON 文件，包含当前场景字段、ER 关系和底部语义字段。客户机器选择“导入为新场景”即可复用同一套配置；“合并到当前场景”和“覆盖当前场景”会先显示预检结果，确认后才写入。</p>
         <p><strong>常见用法</strong>：同一个场景可以多次推荐。第一次补品牌/区域，第二次补价格，第三次补类目。每次只勾选这次确认需要的字段和关系。</p>
         <pre class="guide-pre">推荐配置完成后，可以去“查询执行”测试：
 优衣库中国和日本最近30天价格带分布

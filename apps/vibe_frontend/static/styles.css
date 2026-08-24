@@ -1879,6 +1879,25 @@ button:disabled {
   cursor: help;
 }
 
+.cell-hover-tip {
+  position: fixed;
+  z-index: 9999;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid rgba(89, 138, 183, 0.9);
+  border-radius: 10px;
+  background: rgba(7, 19, 33, 0.96);
+  color: #eef4ff;
+  box-shadow: 0 16px 32px rgba(2, 9, 18, 0.46);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
 [data-tab-panel="config"] .selected-draft-field-table {
   min-width: 560px;
 }

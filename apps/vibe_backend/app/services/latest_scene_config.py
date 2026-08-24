@@ -49,15 +49,15 @@ LATEST_SCENE_CONFIG = {
         },
         {
             "semantic_name": "品牌",
-            "table_name": "clothing_info",
-            "field_name": "BrandName",
+            "table_name": "dict_brand_info",
+            "field_name": "Name",
             "role": "dimension",
             "required": True,
-            "description": "最新商品按品牌查看和展示的核心维度。",
-            "aliases": ["BrandName", "品牌"],
+            "description": "标准品牌名称，来自品牌字典；通过 dict_brand_info.Code = clothing_info.BrandCode 关联商品。",
+            "aliases": ["品牌", "标准品牌", "Brand", "BrandName", "Name", "NameEn", "Alias", "UNIQLO"],
             "unit": "",
             "aggregation": "",
-            "er_path": "",
+            "er_path": "dict_brand_info.Code = clothing_info.BrandCode",
         },
         {
             "semantic_name": "一级类目",
@@ -144,7 +144,16 @@ LATEST_SCENE_CONFIG = {
             "er_path": "",
         },
     ],
-    "relations": [],
+    "relations": [
+        {
+            "left_table": "dict_brand_info",
+            "left_field": "Code",
+            "right_table": "clothing_info",
+            "right_field": "BrandCode",
+            "join_type": "LEFT",
+            "note": "标准品牌字典到商品主表；品牌筛选和展示优先使用 dict_brand_info.Name。",
+        }
+    ],
     "metric_templates": [],
     "price_band_template": [],
     "question_matrix": [
@@ -172,8 +181,8 @@ LATEST_SCENE_CONFIG = {
                 },
                 {
                     "semantic_name": "品牌",
-                    "table_name": "clothing_info",
-                    "field_name": "BrandName",
+                    "table_name": "dict_brand_info",
+                "field_name": "Name",
                     "role": "dimension",
                     "required": True,
                     "purpose": "品牌展示字段",

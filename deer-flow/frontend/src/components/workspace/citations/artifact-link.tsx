@@ -17,8 +17,21 @@ export function ArtifactLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
       return <CitationLink {...props}>{text}</CitationLink>;
     }
   }
-  const { className, target, rel, ...rest } = props;
+  const { className, target, rel, onClick, ...rest } = props;
   const external = isExternalUrl(props.href);
+  const handleClick: AnchorHTMLAttributes<HTMLAnchorElement>["onClick"] = (
+    event,
+  ) => {
+    onClick?.(event);
+    if (!external || event.defaultPrevented) return;
+    event.preventDefault();
+    try {
+      if (navigator.clipboard && props.href) {
+        void navigator.clipboard.writeText(props.href);
+      }
+    } catch {}
+    console.info("Artifact preview link navigation blocked:", props.href);
+  };
   return (
     <a
       {...rest}
@@ -26,6 +39,7 @@ export function ArtifactLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
         "text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary/60 transition-colors",
         className,
       )}
+      onClick={handleClick}
       target={target ?? (external ? "_blank" : undefined)}
       rel={rel ?? (external ? "noopener noreferrer" : undefined)}
     />

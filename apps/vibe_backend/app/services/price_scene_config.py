@@ -25,12 +25,12 @@ PRICE_SCENE_FIELDS = [
     },
     {
         "semantic_name": "品牌",
-        "table_name": "clothing_info",
-        "field_name": "BrandName",
+        "table_name": "dict_brand_info",
+        "field_name": "Name",
         "role": "dimension",
         "required": True,
-        "description": "价格结构对比的核心维度。",
-        "aliases": ["BrandName", "品牌"],
+        "description": "标准品牌名称，来自品牌字典；通过 dict_brand_info.Code = clothing_info.BrandCode 关联商品。",
+        "aliases": ["品牌", "标准品牌", "Brand", "BrandName", "Name", "NameEn", "Alias", "UNIQLO"],
     },
     {
         "semantic_name": "一级类目",
@@ -90,6 +90,14 @@ PRICE_SCENE_FIELDS = [
 
 PRICE_SCENE_RELATIONS = [
     {
+        "left_table": "dict_brand_info",
+        "left_field": "Code",
+        "right_table": "clothing_info",
+        "right_field": "BrandCode",
+        "join_type": "LEFT",
+        "note": "标准品牌字典到商品主表；品牌筛选和分组优先使用 dict_brand_info.Name，禁止用 clothing_info.BrandName LIKE 混合不同地区品牌。",
+    },
+    {
         "left_table": "clothing_info",
         "left_field": "Id",
         "right_table": "clothing_scene_info",
@@ -132,7 +140,7 @@ PRICE_SCENE_METRIC_TEMPLATES = [
     },
     {
         "name": "品牌覆盖数",
-        "formula": "COUNT(DISTINCT BrandName)",
+        "formula": "COUNT(DISTINCT dict_brand_info.Code)",
         "description": "来源站点或场景维度下的品牌覆盖。",
     },
 ]
@@ -174,8 +182,8 @@ PRICE_SCENE_QUESTION_MATRIX = [
             },
             {
                 "semantic_name": "品牌",
-                "table_name": "clothing_info",
-                "field_name": "BrandName",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
                 "role": "dimension",
                 "required": True,
                 "purpose": "分组维度",
@@ -266,8 +274,8 @@ PRICE_SCENE_QUESTION_MATRIX = [
             },
             {
                 "semantic_name": "品牌",
-                "table_name": "clothing_info",
-                "field_name": "BrandName",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
                 "role": "dimension",
                 "required": True,
                 "purpose": "品牌分组",
@@ -306,8 +314,8 @@ PRICE_SCENE_QUESTION_MATRIX = [
             },
             {
                 "semantic_name": "品牌",
-                "table_name": "clothing_info",
-                "field_name": "BrandName",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
                 "role": "dimension",
                 "required": True,
                 "purpose": "品牌分组",
@@ -355,8 +363,8 @@ PRICE_SCENE_QUESTION_MATRIX = [
             },
             {
                 "semantic_name": "品牌",
-                "table_name": "clothing_info",
-                "field_name": "BrandName",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
                 "role": "dimension",
                 "required": True,
                 "purpose": "品牌覆盖统计",
@@ -379,7 +387,7 @@ PRICE_SCENE_QUESTION_MATRIX = [
             },
         ],
         "derived_metrics": [
-            {"name": "品牌覆盖数", "formula": "COUNT(DISTINCT BrandName)"},
+            {"name": "品牌覆盖数", "formula": "COUNT(DISTINCT dict_brand_info.Code)"},
             {"name": "SKU数", "formula": "COUNT(DISTINCT Id)"},
             {"name": "平均价", "formula": "AVG(Price)"},
         ],
@@ -404,8 +412,8 @@ PRICE_SCENE_QUESTION_MATRIX = [
             },
             {
                 "semantic_name": "品牌",
-                "table_name": "clothing_info",
-                "field_name": "BrandName",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
                 "role": "dimension",
                 "required": True,
                 "purpose": "品牌分组",

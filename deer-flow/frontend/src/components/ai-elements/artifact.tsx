@@ -31,7 +31,7 @@ export const ArtifactHeader = ({
 }: ArtifactHeaderProps) => (
   <div
     className={cn(
-      "bg-muted/50 flex items-center justify-between border-b px-4 py-3",
+      "bg-muted/50 flex min-w-0 items-center justify-between gap-2 border-b px-4 py-3",
       className,
     )}
     {...props}
@@ -66,7 +66,7 @@ export type ArtifactTitleProps = HTMLAttributes<HTMLParagraphElement>;
 
 export const ArtifactTitle = ({ className, ...props }: ArtifactTitleProps) => (
   <div
-    className={cn("text-foreground text-sm font-medium", className)}
+    className={cn("text-foreground min-w-0 text-sm font-medium", className)}
     {...props}
   />
 );
@@ -86,7 +86,7 @@ export const ArtifactActions = ({
   className,
   ...props
 }: ArtifactActionsProps) => (
-  <div className={cn("flex items-center gap-1", className)} {...props} />
+  <div className={cn("flex shrink-0 items-center gap-1", className)} {...props} />
 );
 
 export type ArtifactActionProps = ComponentProps<typeof Button> & {

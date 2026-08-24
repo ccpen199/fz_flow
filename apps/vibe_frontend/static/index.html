@@ -388,7 +388,7 @@
                 </div>
               </div>
               <div class="actions compact-actions">
-                <button id="runQueryBtn">生成并执行</button>
+                <button id="runQueryBtn">确认并生成SQL</button>
               </div>
               <div id="fieldResolutionPanel" class="field-resolution-panel" hidden>
                 <div class="section-head field-resolution-head">
@@ -397,9 +397,6 @@
                 </div>
                 <p id="fieldResolutionSummary" class="muted field-resolution-summary"></p>
                 <div id="fieldResolutionList" class="field-resolution-list"></div>
-                <div class="actions compact-actions field-resolution-actions">
-                  <button id="confirmFieldResolutionBtn" type="button">确认并生成SQL</button>
-                </div>
               </div>
               <p id="querySaveHint" class="muted query-save-hint"></p>
               <p class="muted">
@@ -571,28 +568,41 @@
 
 补充类目结构分析配置，优先推荐一级类目、二级类目、叶子类目和类目字典关系。</pre>
         <p><strong>怎么判断结果</strong>：推荐结果只是候选，不会直接生效。字段和关系进入“已选列表”后，还要点击“导入勾选”，才会写入当前场景配置。</p>
-        <p><strong>配置迁移</strong>：点击“导出配置”会生成 JSON 文件，包含当前场景字段、ER 关系和底部语义字段。客户机器选择“导入为新场景”即可复用同一套配置；“合并到当前场景”和“覆盖当前场景”会先显示预检结果，确认后才写入。</p>
         <p><strong>常见用法</strong>：同一个场景可以多次推荐。第一次补品牌/区域，第二次补价格，第三次补类目。每次只勾选这次确认需要的字段和关系。</p>
+        <p><strong>配置迁移</strong>：点击“导出配置”会生成 JSON 文件，包含当前场景字段、ER 关系和底部语义字段。客户机器选择“导入为新场景”即可复用同一套配置；“合并到当前场景”和“覆盖当前场景”会先显示预检结果，确认后才写入。</p>
         <pre class="guide-pre">推荐配置完成后，可以去“查询执行”测试：
 优衣库中国和日本最近30天价格带分布
 各品牌在不同二级类目的价格区间占比
 最近30天各平台上新SKU数趋势</pre>
-        <p><strong>如果 LLM 推荐不全或不准</strong>：直接用底部“场景语义配置区”手工补字段和关系。手工项会进入当前场景，后续推荐和查询都会沿用，不用等 LLM 再猜一次。</p>
+        <p><strong>如果 LLM 推荐不全或不准</strong>：直接用底部“场景语义配置区”手工补字段和关系。这里补的是场景底座，不是上面的导入清单；它会成为这套场景的长期语义配置，后续推荐和查询会沿用，但不会自动替代上面的已选导入列表。</p>
         <pre class="guide-pre">手工新增字段示例：
-语义名：品牌字典名称
-table_name：dict_brand
+语义名：标准纤维名称
+table_name：dict_fiber_info
 field_name：Name
 role：dimension
-说明：用于区分品牌的中国 / 日本 / 其他版本。
+说明：用于显示标准纤维名称。
+
+语义名：纤维编码
+table_name：clothing_fiber_info
+field_name：Code
+role：dimension
+说明：用于关联服装纤维明细和标准字典。
 
 手工新增关系示例：
 left_table：clothing_info
-left_field：BrandName
-right_table：dict_brand
-right_field：Name
+left_field：Id
+right_table：clothing_fiber_info
+right_field：ClothingId
 join_type：LEFT
-note：品牌名称映射，后续推荐时优先复用。</pre>
-        <p>如果你的库不是按 <code>Name</code> / <code>Code</code> 组织，把上面的表名和字段名换成你库里的真实字段就行。</p>
+note：服装到纤维成分明细。
+
+left_table：clothing_fiber_info
+left_field：Code
+right_table：dict_fiber_info
+right_field：Code
+join_type：LEFT
+note：纤维编码映射到标准纤维字典。</pre>
+        <p>如果你的库不是按 <code>Name</code> / <code>Code</code> 组织，把上面的表名和字段名换成你库里的真实字段就行；但像这种字典树，最好先用视图把子树收口，再让场景去连这个视图。</p>
       </div>
     </dialog>
     <script src="./main.js?v=20260804-config-flow-help"></script>

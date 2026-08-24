@@ -54,6 +54,8 @@ const state = {
     intent: "",
     selections: {},
   },
+  fieldResolutionAutoTimerId: 0,
+  fieldResolutionRequestId: 0,
   currentSession: null,
   currentDeck: null,
   currentArtifact: null,
@@ -454,6 +456,26 @@ function normalizeSceneList(payload) {
   return result;
 }
 
+async function restoreLatestQueryResultFocus() {
+  try {
+    const payload = await api("/api/v1/sql-result-agent/history");
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const latest = items.find((entry) => {
+      const session = getHistorySession(entry);
+      return Boolean(session?.session_id && session?.scene_id && entry?.query_run);
+    });
+    if (!latest) return false;
+    const session = getHistorySession(latest);
+    state.currentSceneId = String(session.scene_id || "").trim();
+    state.restoreSessionId = String(session.session_id || "").trim();
+    state.activeTab = "query";
+    return true;
+  } catch (error) {
+    console.warn("restore latest query result focus failed", error);
+    return false;
+  }
+}
+
 function getCurrentSceneName() {
   const scene = state.scenes.find((item) => item.scene_id === state.currentSceneId);
   return scene?.name || "";
@@ -671,6 +693,11 @@ function renderPriceBandModeControl() {
 }
 
 function resetFieldResolutionState() {
+  state.fieldResolutionRequestId += 1;
+  if (state.fieldResolutionAutoTimerId) {
+    window.clearTimeout(state.fieldResolutionAutoTimerId);
+    state.fieldResolutionAutoTimerId = 0;
+  }
   state.fieldResolution = {
     analysis: null,
     intent: "",
@@ -685,17 +712,62 @@ function normalizeFieldResolutionCandidateIndex(value) {
   return raw;
 }
 
+function escapeRegexText(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildFieldResolutionIntentText(intent, analysis, selections) {
+  let resolvedIntent = String(intent || "").trim();
+  const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+  const replacements = [];
+  for (const term of terms) {
+    const termId = String(term?.term_id || "").trim();
+    const selection = normalizeFieldResolutionCandidateIndex(selections?.[termId]);
+    const matchIndex = Number.parseInt(selection, 10);
+    const matches = Array.isArray(term?.matches) ? term.matches : [];
+    const match = Number.isInteger(matchIndex) ? matches[matchIndex] : null;
+    const canonicalValue = String(match?.canonical_value || "").trim();
+    const termText = String(term?.text || "").trim();
+    if (!canonicalValue || !termText || selection === "__ignore__") continue;
+    let pattern = escapeRegexText(termText)
+      .replace(/\\\(/g, "[（(]")
+      .replace(/\\\)/g, "[）)]")
+      .replace(/\\\[/g, "[【\\[]")
+      .replace(/\\\]/g, "[】\\]]");
+    if (!/[（(]/.test(termText) && !/[【\[]/.test(termText)) {
+      pattern += "(?:\\s*[（(]\\s*[）)])?";
+    }
+    replacements.push({
+      pattern: new RegExp(pattern, "gi"),
+      canonicalValue,
+      length: termText.length,
+    });
+  }
+  replacements
+    .sort((left, right) => right.length - left.length)
+    .forEach((item) => {
+      resolvedIntent = resolvedIntent.replace(item.pattern, item.canonicalValue);
+    });
+  return resolvedIntent;
+}
+
+function recommendedFieldResolutionCandidateIndex(term) {
+  const matches = Array.isArray(term?.matches) ? term.matches : [];
+  if (!matches.length) return "";
+  const recommended = Number.parseInt(term?.recommended_match_index, 10);
+  if (Number.isInteger(recommended) && recommended >= 0 && recommended < matches.length) {
+    return String(recommended);
+  }
+  return "0";
+}
+
 function buildDefaultFieldResolutionSelections(analysis) {
   const selections = {};
   const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
   for (const term of terms) {
     const termId = String(term?.term_id || "").trim();
     if (!termId) continue;
-    if (term?.status === "resolved") {
-      selections[termId] = "0";
-    } else {
-      selections[termId] = "";
-    }
+    selections[termId] = recommendedFieldResolutionCandidateIndex(term);
   }
   return selections;
 }
@@ -820,15 +892,26 @@ function renderFieldResolutionPanel() {
   panel.hidden = false;
   const ambiguousCount = Array.isArray(analysis.ambiguous_terms) ? analysis.ambiguous_terms.length : 0;
   const resolvedCount = Array.isArray(analysis.resolved_terms) ? analysis.resolved_terms.length : 0;
+  const inferredIntent = buildFieldResolutionIntentText(
+    state.fieldResolution.intent,
+    analysis,
+    state.fieldResolution.selections,
+  );
+  const inferredIntentText =
+    inferredIntent && normalizeIntent(inferredIntent) !== normalizeIntent(state.fieldResolution.intent)
+      ? `识别意图：${inferredIntent}。`
+      : "";
   summary.textContent = ambiguousCount
-    ? `已识别 ${analysis.matched_term_count || 0} 个候选词，其中 ${ambiguousCount} 个需要确认，${resolvedCount} 个已自动识别。`
-    : `已识别 ${analysis.matched_term_count || 0} 个候选词，未发现歧义，可直接继续。`;
+    ? `${inferredIntentText}字段已自动识别 ${analysis.matched_term_count || 0} 个候选词，其中 ${ambiguousCount} 个有多个候选，已默认选择第一项，可在下拉框中调整；${resolvedCount} 个已自动识别。`
+    : `${inferredIntentText}字段已自动识别 ${analysis.matched_term_count || 0} 个候选词，未发现歧义，请点击“确认并生成SQL”继续。`;
 
   list.innerHTML = terms
     .map((term) => {
       const termId = String(term?.term_id || "").trim();
       const matches = Array.isArray(term?.matches) ? term.matches : [];
-      const currentValue = normalizeFieldResolutionCandidateIndex(state.fieldResolution.selections[termId] ?? (term?.status === "resolved" ? "0" : ""));
+      const currentValue = normalizeFieldResolutionCandidateIndex(
+        state.fieldResolution.selections[termId] ?? recommendedFieldResolutionCandidateIndex(term),
+      );
       const choices = [
         {
           value: "",
@@ -865,8 +948,8 @@ function renderFieldResolutionPanel() {
       const statusText =
         term?.status === "ambiguous"
           ? reason === "multiple_values"
-            ? "同字段多个标准值命中，请确认"
-            : "多个字段命中，请确认"
+            ? "同字段多个标准值命中，已默认选第一项"
+            : "多个字段命中，已默认选第一项"
           : "已自动识别";
       return `
         <div class="field-resolution-row" data-term-id="${escapeHtml(termId)}">
@@ -906,6 +989,79 @@ async function analyzeFieldResolutionForIntent(intent) {
   setFieldResolutionAnalysis(analysis, intent);
   syncFieldResolutionSelectionsFromDom();
   return analysis;
+}
+
+function currentFieldResolutionIntent() {
+  return normalizeIntent(
+    (el("queryIntentInput")?.value || "").trim() ||
+    (el("goalInput")?.value || "").trim() ||
+    (el("llmGoal")?.value || "").trim(),
+  );
+}
+
+async function autoAnalyzeFieldResolutionForIntent(intent, requestId) {
+  const normalizedIntent = normalizeIntent(intent);
+  if (!normalizedIntent || !state.currentSceneId || requestId !== state.fieldResolutionRequestId) {
+    return null;
+  }
+  if (el("querySaveHint")) el("querySaveHint").textContent = "正在自动识别字段...";
+  try {
+    const analysis = await analyzeFieldResolutionForIntent(normalizedIntent);
+    if (
+      requestId !== state.fieldResolutionRequestId ||
+      normalizeIntent(currentFieldResolutionIntent()) !== normalizedIntent
+    ) {
+      return null;
+    }
+    const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+    if (el("querySaveHint")) {
+      el("querySaveHint").textContent = terms.length
+        ? "字段已自动识别并默认选中，请确认后生成SQL。"
+        : "字段已自动识别，未发现需要转换的标准值，可确认后生成SQL。";
+    }
+    return analysis;
+  } catch (error) {
+    if (requestId === state.fieldResolutionRequestId && el("querySaveHint")) {
+      el("querySaveHint").textContent = `字段自动识别失败：${formatErrorDetail(error?.detail || error?.message || error)}`;
+    }
+    return null;
+  }
+}
+
+function scheduleAutoFieldResolutionAnalysis(intent, { immediate = false } = {}) {
+  const normalizedIntent = normalizeIntent(intent);
+  resetFieldResolutionState();
+  if (!normalizedIntent || !state.currentSceneId) {
+    if (el("querySaveHint")) el("querySaveHint").textContent = "";
+    return;
+  }
+  const requestId = state.fieldResolutionRequestId;
+  const delay = immediate ? 0 : 350;
+  state.fieldResolutionAutoTimerId = window.setTimeout(() => {
+    state.fieldResolutionAutoTimerId = 0;
+    autoAnalyzeFieldResolutionForIntent(normalizedIntent, requestId);
+  }, delay);
+}
+
+async function ensureFieldResolutionAnalysisForCurrentIntent() {
+  const intent = currentFieldResolutionIntent();
+  if (!intent || !state.currentSceneId) return null;
+  const existingAnalysis =
+    state.fieldResolution.analysis &&
+    normalizeIntent(state.fieldResolution.intent) === intent;
+  if (existingAnalysis) return state.fieldResolution.analysis;
+
+  resetFieldResolutionState();
+  const requestId = state.fieldResolutionRequestId;
+  return autoAnalyzeFieldResolutionForIntent(intent, requestId);
+}
+
+async function confirmAndGenerateSqlFromFieldResolution() {
+  const intent = currentFieldResolutionIntent();
+  if (!intent) throw new Error("请先输入业务问题或分析目标");
+  const analysis = await ensureFieldResolutionAnalysisForCurrentIntent();
+  if (!analysis) throw new Error("字段自动识别失败，请稍后重试");
+  return runSqlResultAgentFromConfig({ skipFieldResolution: true });
 }
 
 function getSceneDraft(sceneId) {
@@ -1104,7 +1260,8 @@ function renderAgentWaitHint() {
   }
   if (sqlResultWait?.startedAt) {
     const sec = Math.max(1, Math.floor((Date.now() - sqlResultWait.startedAt) / 1000));
-    waitItems.push(`SQL 结果 Agent 正在返回，已等待 ${sec}s`);
+    const label = sqlResultWait.label || "SQL 结果 Agent";
+    waitItems.push(`${label}正在返回，已等待 ${sec}s`);
   }
   if (recommendBtn) {
     const busy = Boolean(recommendWait?.startedAt);
@@ -1119,7 +1276,7 @@ function renderAgentWaitHint() {
   if (runQueryBtn) {
     const busy = Boolean(sqlResultWait?.startedAt);
     runQueryBtn.disabled = busy;
-    runQueryBtn.textContent = busy ? "处理中..." : "生成并执行";
+    runQueryBtn.textContent = busy ? "执行中..." : "确认并生成SQL";
   }
   if (!hintEl) return;
   if (!waitItems.length) {
@@ -1339,8 +1496,126 @@ function renderTitleCell(value, className = "", titleValue = value) {
   const text = String(value ?? "");
   const titleText = String(titleValue ?? text);
   const classes = className ? ` class="${className}"` : "";
-  const title = titleText ? ` title="${escapeHtml(titleText)}"` : "";
-  return `<td${classes}${title}>${escapeHtml(text)}</td>`;
+  const tip = titleText ? ` data-hover-tip="${escapeHtml(titleText)}"` : "";
+  return `<td${classes}${tip}>${escapeHtml(text)}</td>`;
+}
+
+const hoverTipState = {
+  node: null,
+  target: null,
+  rafId: 0,
+};
+
+function ensureHoverTipNode() {
+  if (hoverTipState.node) return hoverTipState.node;
+  const node = document.createElement("div");
+  node.className = "cell-hover-tip";
+  node.hidden = true;
+  document.body.appendChild(node);
+  hoverTipState.node = node;
+  return node;
+}
+
+function hideHoverTip() {
+  if (hoverTipState.rafId) {
+    cancelAnimationFrame(hoverTipState.rafId);
+    hoverTipState.rafId = 0;
+  }
+  hoverTipState.target = null;
+  if (!hoverTipState.node) return;
+  hoverTipState.node.hidden = true;
+  hoverTipState.node.style.opacity = "0";
+}
+
+function positionHoverTip(event) {
+  const node = hoverTipState.node;
+  if (!node || node.hidden) return;
+  const gap = 14;
+  const margin = 12;
+  const rect = node.getBoundingClientRect();
+  let left = event.clientX + gap;
+  let top = event.clientY + gap;
+  if (left + rect.width + margin > window.innerWidth) {
+    left = Math.max(margin, event.clientX - rect.width - gap);
+  }
+  if (top + rect.height + margin > window.innerHeight) {
+    top = Math.max(margin, event.clientY - rect.height - gap);
+  }
+  node.style.left = `${Math.max(margin, left)}px`;
+  node.style.top = `${Math.max(margin, top)}px`;
+}
+
+function showHoverTip(target, event) {
+  if (!(target instanceof HTMLElement)) return;
+  const tipText = String(target.dataset.hoverTip || "").trim();
+  if (!tipText) {
+    hideHoverTip();
+    return;
+  }
+  const node = ensureHoverTipNode();
+  hoverTipState.target = target;
+  node.textContent = tipText;
+  node.hidden = false;
+  node.style.opacity = "0";
+  if (hoverTipState.rafId) cancelAnimationFrame(hoverTipState.rafId);
+  hoverTipState.rafId = requestAnimationFrame(() => {
+    hoverTipState.rafId = 0;
+    if (hoverTipState.target !== target) return;
+    positionHoverTip(event);
+    node.style.opacity = "1";
+  });
+}
+
+function bindHoverTips() {
+  const updateFromEvent = (event) => {
+    const target = event.target instanceof HTMLElement ? event.target.closest("[data-hover-tip]") : null;
+    if (!target) {
+      hideHoverTip();
+      return;
+    }
+    if (hoverTipState.target !== target) {
+      showHoverTip(target, event);
+      return;
+    }
+    positionHoverTip(event);
+  };
+
+  document.addEventListener(
+    "mouseover",
+    (event) => {
+      updateFromEvent(event);
+    },
+    true,
+  );
+  document.addEventListener(
+    "mousemove",
+    (event) => {
+      if (!hoverTipState.target) return;
+      const target = event.target instanceof HTMLElement ? event.target.closest("[data-hover-tip]") : null;
+      if (!target || target !== hoverTipState.target) return;
+      positionHoverTip(event);
+    },
+    true,
+  );
+  document.addEventListener(
+    "mouseout",
+    (event) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest("[data-hover-tip]") : null;
+      if (!target || target !== hoverTipState.target) return;
+      const related = event.relatedTarget instanceof HTMLElement ? event.relatedTarget.closest("[data-hover-tip]") : null;
+      if (related === target) return;
+      if (!related) hideHoverTip();
+    },
+    true,
+  );
+  document.addEventListener(
+    "scroll",
+    () => {
+      if (hoverTipState.target) hideHoverTip();
+    },
+    true,
+  );
+  window.addEventListener("blur", hideHoverTip);
 }
 
 function splitAliases(value) {
@@ -1457,7 +1732,7 @@ function renderSceneRelationsTable(relations) {
         renderTitleCell(row.join_type || "", "hover-tip-cell", relationExpr),
         renderTitleCell(noteText, "hover-tip-cell", noteText),
       ].join("");
-      return `<tr class="previewable-row" title="${escapeHtml(`${relationExpr}${noteText ? ` · ${noteText}` : ""}`)}" data-preview-title="已配置关系详情" data-preview-payload="${encodeRowPayload(row)}">${cells}<td><button class="secondary relation-delete-btn" data-relation-id="${relationId}">删除</button></td></tr>`;
+      return `<tr class="previewable-row" data-preview-title="已配置关系详情" data-preview-payload="${encodeRowPayload(row)}">${cells}<td><button class="secondary relation-delete-btn" data-relation-id="${relationId}">删除</button></td></tr>`;
     })
     .join("");
   return `${renderFixedTableOpen(["sticky-actions-1", "uniform-list-table"], [88, 88, 88, 88, 72, 88, 52])}<thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
@@ -1494,7 +1769,7 @@ function renderSelectedDraftTable(kind, rows) {
       const requiredText = item.required ? "true" : "false";
       const relationExpr = `${item.left_table || ""}.${item.left_field || ""} = ${item.right_table || ""}.${item.right_field || ""}`;
       const noteText = item.note || item.reason || "";
-      return `<tr class="previewable-row" title="${escapeHtml(`${relationExpr}${noteText ? ` · ${noteText}` : ""}`)}" data-preview-title="已选关系详情" data-preview-payload="${encodeRowPayload(item)}">
+      return `<tr class="previewable-row" data-preview-title="已选关系详情" data-preview-payload="${encodeRowPayload(item)}">
         ${renderTitleCell(relationExpr, "hover-tip-cell")}
         ${renderTitleCell(item.join_type || "", "hover-tip-cell")}
         ${renderTitleCell(item.cardinality || "", "hover-tip-cell")}
@@ -2636,7 +2911,14 @@ async function refreshClothingFacets() {
 }
 
 async function fetchClothingDetail(id) {
-  state.clothing.detail = await api(`/api/v1/clothing/items/${id}`);
+  try {
+    state.clothing.detail = await api(`/api/v1/clothing/items/${id}`);
+  } catch (error) {
+    state.clothing.detail = {
+      message: "商品详情加载失败",
+      detail: formatErrorDetail(error?.detail || error?.message || error),
+    };
+  }
 }
 
 async function refreshClothingItems({ keepPage = false } = {}) {
@@ -3147,7 +3429,6 @@ async function importSceneConfigFile(file) {
   setCreateSceneHint(`配置导入完成：${result?.scene_name || sourceName}。${formatConfigTransferCounts(result?.counts)}`);
 }
 
-
 async function recommendSceneByLlm() {
   if (!state.currentSceneId) throw new Error("未选择场景");
   const goal = (el("llmGoal")?.value || "").trim();
@@ -3496,6 +3777,14 @@ async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {})
     if (fieldResolutionPayload.has_unresolved_required_terms) {
       if (el("querySaveHint")) {
         el("querySaveHint").textContent = "已识别到需要确认的字段，请先在下方完成字段筛选，再继续生成SQL。";
+      }
+      return;
+    }
+    const hasFieldResolutionTerms = Array.isArray(state.fieldResolution.analysis?.terms)
+      && state.fieldResolution.analysis.terms.length > 0;
+    if (hasFieldResolutionTerms) {
+      if (el("querySaveHint")) {
+        el("querySaveHint").textContent = "字段已自动识别并默认选中，请人工点击“确认并生成SQL”执行。";
       }
       return;
     }
@@ -3903,6 +4192,7 @@ function bindTableWrapWheelScroll() {
 }
 
 function bind() {
+  bindHoverTips();
   bindTabs();
   bindTableWrapWheelScroll();
   setBackendBaseInput(normalizeBackendBase(state.backendBase));
@@ -3924,11 +4214,7 @@ function bind() {
   };
   if (el("createSessionBtn")) el("createSessionBtn").onclick = () => run(createSession);
   el("runQueryBtn").onclick = () =>
-    run(() => withAgentWait("sqlResult", "SQL 结果 Agent", runSqlResultAgentFromConfig));
-  if (el("confirmFieldResolutionBtn")) {
-    el("confirmFieldResolutionBtn").onclick = () =>
-      run(() => withAgentWait("sqlResult", "SQL 结果 Agent", () => runSqlResultAgentFromConfig({ skipFieldResolution: true })));
-  }
+    run(() => withAgentWait("sqlResult", "SQL 结果 Agent", confirmAndGenerateSqlFromFieldResolution));
   if (el("clearFieldResolutionBtn")) {
     el("clearFieldResolutionBtn").onclick = () => resetFieldResolutionState();
   }
@@ -3983,7 +4269,7 @@ function bind() {
     state.selectedPresetKey = btn.dataset.presetKey || "";
     state.selectedPresetQuestion = intent;
     fillIntentInputs(intent);
-    resetFieldResolutionState();
+    scheduleAutoFieldResolutionAnalysis(intent, { immediate: true });
     persistUiState();
     if (el("queryIntentInput")) {
       el("queryIntentInput").focus();
@@ -4016,7 +4302,7 @@ function bind() {
   if (el("goalInput")) el("goalInput").addEventListener("input", () => persistUiState());
   if (el("queryIntentInput")) {
     el("queryIntentInput").addEventListener("input", () => {
-      resetFieldResolutionState();
+      scheduleAutoFieldResolutionAnalysis(el("queryIntentInput").value);
       renderPriceBandModeControl();
       persistUiState();
     });
@@ -4080,6 +4366,16 @@ function bind() {
   el("refreshConfigBtn").onclick = () => run(refreshSceneDetail);
   el("refreshDbCacheBtn").onclick = () => run(refreshDbCacheFromMysql);
   el("addFieldBtn").onclick = () => run(addSceneField);
+  el("exportSceneConfigBtn").onclick = () => run(exportCurrentSceneConfig);
+  el("importSceneConfigBtn").onclick = () => el("sceneConfigFileInput").click();
+  el("sceneConfigFileInput").addEventListener("change", (event) => {
+    const input = event.target;
+    const file = input instanceof HTMLInputElement ? input.files?.[0] : null;
+    if (!file) return;
+    run(() => importSceneConfigFile(file)).finally(() => {
+      input.value = "";
+    });
+  });
   el("cancelEditFieldBtn").onclick = () => clearSemanticFieldForm();
   el("semanticCacheSearchBtn").onclick = () => {
     state.semanticCacheKeyword = el("semanticCacheKeyword").value.trim();
@@ -4136,19 +4432,9 @@ function bind() {
   });
   el("llmRecommendBtn").onclick = () => run(() => withAgentWait("recommend", "推荐 Agent", recommendSceneByLlm));
   el("llmImportBtn").onclick = () => run(applySceneDraftFromLlm);
-  el("exportSceneConfigBtn").onclick = () => run(exportCurrentSceneConfig);
-  el("importSceneConfigBtn").onclick = () => el("sceneConfigFileInput").click();
-  el("sceneConfigFileInput").addEventListener("change", (event) => {
-    const input = event.target;
-    const file = input instanceof HTMLInputElement ? input.files?.[0] : null;
-    if (!file) return;
-    run(() => importSceneConfigFile(file)).finally(() => {
-      input.value = "";
-    });
-  });
   if (el("llmSqlResultBtn")) {
     el("llmSqlResultBtn").onclick = () =>
-      run(() => withAgentWait("sqlResult", "SQL 结果 Agent", runSqlResultAgentFromConfig));
+      run(() => withAgentWait("sqlResult", "SQL 结果 Agent", confirmAndGenerateSqlFromFieldResolution));
   }
   el("llmFieldsSelectAllBtn").onclick = () => run(() => setAllLlmCandidates("field", true));
   el("llmFieldsSelectNoneBtn").onclick = () => run(() => setAllLlmCandidates("field", false));
@@ -4233,9 +4519,14 @@ async function run(fn) {
 }
 
 async function bootstrap() {
+  await restoreLatestQueryResultFocus();
   await refreshScenes({ loadHistory: false });
   await refreshSessions();
   await refreshQueryHistory();
+  const restoredIntent = currentFieldResolutionIntent();
+  if (restoredIntent) {
+    scheduleAutoFieldResolutionAnalysis(restoredIntent, { immediate: true });
+  }
   if (state.currentSession?.session_id) {
     await loadReportStateForCurrentSession({ silent: true });
   }

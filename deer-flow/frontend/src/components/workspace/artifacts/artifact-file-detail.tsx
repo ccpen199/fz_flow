@@ -44,6 +44,47 @@ import { Tooltip } from "../tooltip";
 
 import { useArtifacts } from "./context";
 
+const HTML_PREVIEW_NAVIGATION_GUARD = `
+(function () {
+  function getAnchor(target) {
+    if (!target || typeof target.closest !== "function") return null;
+    return target.closest("a[href]");
+  }
+
+  document.addEventListener(
+    "click",
+    function (event) {
+      var anchor = getAnchor(event.target);
+      if (!anchor) return;
+      var href = anchor.getAttribute("href") || "";
+      if (!href || href.charAt(0) === "#") return;
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        if (navigator.clipboard && anchor.href) {
+          navigator.clipboard.writeText(anchor.href);
+        }
+      } catch {}
+      console.info("Preview link navigation blocked:", anchor.href || href);
+    },
+    true
+  );
+
+  window.open = function (url) {
+    console.info("Preview popup blocked:", url || "");
+    return null;
+  };
+})();
+`;
+
+function withHtmlPreviewNavigationGuard(content: string) {
+  const guard = `<script>${HTML_PREVIEW_NAVIGATION_GUARD}</script>`;
+  if (/<\/body\s*>/i.test(content)) {
+    return content.replace(/<\/body\s*>/i, `${guard}</body>`);
+  }
+  return `${content}${guard}`;
+}
+
 export function ArtifactFileDetail({
   className,
   filepath: filepathFromProps,
@@ -286,7 +327,7 @@ export function ArtifactFilePreview({
       <iframe
         className="size-full"
         title="Artifact preview"
-        srcDoc={content}
+        srcDoc={withHtmlPreviewNavigationGuard(content)}
         sandbox="allow-scripts allow-forms"
       />
     );

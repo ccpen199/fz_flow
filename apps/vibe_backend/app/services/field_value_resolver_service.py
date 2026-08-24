@@ -148,6 +148,7 @@ class FieldValueCandidate:
     value: str
     count: int
     normalized: str
+    recent_count: int = 0
 
 
 class FieldValueResolverService:
@@ -378,6 +379,7 @@ class FieldValueResolverService:
         raw_value: Any,
         semantic_name: str = "",
         candidate_values: list[Any] | None = None,
+        prefer_recent: bool = False,
     ) -> dict[str, Any]:
         raw_text = str(raw_value or "").strip()
         result_base = {
@@ -425,12 +427,21 @@ class FieldValueResolverService:
                 exact_matches = [
                     item
                     for item in values
-                    if normalize_lookup_value(item.value, drop_bracket_notes=False) == raw_key
+                    if item.normalized == raw_key
                 ]
             else:
                 exact_matches = [item for item in values if item.normalized == raw_key]
             if exact_matches:
-                best = self._best_count_candidate(exact_matches)
+                exact_matches = sorted(
+                    exact_matches,
+                    key=lambda item: (
+                        item.recent_count if prefer_recent else 0,
+                        item.count,
+                        len(item.value),
+                    ),
+                    reverse=True,
+                )
+                best = self._best_count_candidate(exact_matches, prefer_recent=prefer_recent)
                 return self._resolved_payload(
                     base=result_base,
                     candidate=best,
@@ -439,11 +450,28 @@ class FieldValueResolverService:
                     alternatives=exact_matches,
                 )
 
-        fuzzy_matches = self._fuzzy_matches(raw_key_without_notes, values)
+        qualified_values = self._brand_qualified_candidates(
+            raw_value=raw_text,
+            values=values,
+            table_name=table_name,
+            field_name=field_name,
+        )
+        fuzzy_values = qualified_values or values
+        fuzzy_matches = self._fuzzy_matches(
+            raw_key_without_notes,
+            fuzzy_values,
+            prefer_recent=prefer_recent,
+        )
         if fuzzy_matches:
             score, best = fuzzy_matches[0]
             second_score = fuzzy_matches[1][0] if len(fuzzy_matches) > 1 else 0.0
-            if self._accept_fuzzy_match(raw_key_without_notes, best.normalized, score, second_score):
+            if self._accept_fuzzy_match(
+                raw_key_without_notes,
+                best.normalized,
+                score,
+                second_score,
+                qualified_phrase=bool(qualified_values),
+            ):
                 return self._resolved_payload(
                     base=result_base,
                     candidate=best,
@@ -472,7 +500,6 @@ class FieldValueResolverService:
         intent: str = "",
     ) -> dict[str, Any]:
         intent_text = str(intent or "").strip()
-        terms = self._extract_lookup_terms(intent_text)
         fields = self._candidate_fields(scene=scene, queryable_fields=queryable_fields)
         field_entries: list[tuple[Any, list[FieldValueCandidate]]] = []
         for field in fields:
@@ -482,6 +509,17 @@ class FieldValueResolverService:
             )
             if values:
                 field_entries.append((field, values))
+        brand_values = next(
+            (
+                values
+                for field, values in field_entries
+                if _field_attr(field, "table_name").lower() == "dict_brand_info"
+                and _field_attr(field, "field_name").lower() == "name"
+            ),
+            [],
+        )
+        terms = self._extract_lookup_terms(intent_text, brand_values=brand_values)
+        prefer_recent = self._intent_prefers_recent_values(intent_text)
 
         groups: list[dict[str, Any]] = []
         for term_index, term in enumerate(terms):
@@ -494,6 +532,7 @@ class FieldValueResolverService:
                     raw_value=term_text,
                     semantic_name=_field_attr(field, "semantic_name"),
                     candidate_values=values,
+                    prefer_recent=prefer_recent,
                 )
                 if not resolved.get("resolved"):
                     continue
@@ -504,6 +543,7 @@ class FieldValueResolverService:
                         {
                             "value": str(resolved.get("canonical_value") or "").strip(),
                             "count": self._candidate_count(resolved),
+                            "recent_count": self._candidate_recent_count(resolved),
                             "score": float(resolved.get("score") or 0),
                         }
                     ]
@@ -521,6 +561,7 @@ class FieldValueResolverService:
                             "score": float(candidate.get("score") if isinstance(candidate, dict) and candidate.get("score") is not None else resolved.get("score") or 0),
                             "strategy": str(resolved.get("strategy") or ""),
                             "count": int(candidate.get("count") or 0) if isinstance(candidate, dict) else self._candidate_count(resolved),
+                            "recent_count": int(candidate.get("recent_count") or 0) if isinstance(candidate, dict) else self._candidate_recent_count(resolved),
                         }
                     )
 
@@ -583,6 +624,15 @@ class FieldValueResolverService:
         except Exception:  # noqa: BLE001
             return 0
 
+    def _candidate_recent_count(self, resolved_payload: dict[str, Any]) -> int:
+        candidates = resolved_payload.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return 0
+        try:
+            return int(candidates[0].get("recent_count") or 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
     def _dedupe_intent_matches(self, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         for match in matches:
@@ -602,11 +652,30 @@ class FieldValueResolverService:
                 deduped[key] = match
         return sorted(
             deduped.values(),
-            key=lambda item: (float(item.get("score") or 0), int(item.get("count") or 0)),
+            key=lambda item: (
+                float(item.get("score") or 0),
+                int(item.get("recent_count") or 0),
+                int(item.get("count") or 0),
+            ),
             reverse=True,
         )
 
-    def _extract_lookup_terms(self, intent: str) -> list[dict[str, str]]:
+    def _intent_prefers_recent_values(self, intent: str) -> bool:
+        text = str(intent or "")
+        return bool(
+            re.search(
+                r"(?:最近|近\s*\d+\s*天|过去\s*\d+\s*天|last\s+\d+\s+days?|past\s+\d+\s+days?)",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _extract_lookup_terms(
+        self,
+        intent: str,
+        *,
+        brand_values: list[FieldValueCandidate] | None = None,
+    ) -> list[dict[str, str]]:
         text = unicodedata.normalize("NFKC", str(intent or ""))
         if not text.strip():
             return []
@@ -614,7 +683,13 @@ class FieldValueResolverService:
         seen: set[str] = set()
         covered_base_keys: set[str] = set()
 
-        def add(raw_text: str, source: str, *, covers_base: bool = False) -> None:
+        def add(
+            raw_text: str,
+            source: str,
+            *,
+            covers_base: bool = False,
+            base_key: str = "",
+        ) -> None:
             value = str(raw_text or "").strip(" \t\r\n,，。;；:：")
             if not value:
                 return
@@ -622,14 +697,18 @@ class FieldValueResolverService:
             if len(normalized) < 2:
                 return
             normalized_with_notes = normalize_lookup_value(value, drop_bracket_notes=False)
-            dedupe_key = normalized_with_notes if source == "qualified_bracket" else normalized
-            if source != "qualified_bracket" and normalized in covered_base_keys:
+            dedupe_key = (
+                normalized_with_notes
+                if source in {"qualified_bracket", "qualified_phrase"}
+                else normalized
+            )
+            if source not in {"qualified_bracket", "qualified_phrase"} and normalized in covered_base_keys:
                 return
             if dedupe_key in seen:
                 return
             seen.add(dedupe_key)
             if covers_base:
-                covered_base_keys.add(normalized)
+                covered_base_keys.add(base_key or normalized)
             terms.append({"text": value, "source": source})
 
         bracket_re = re.compile(r"[\(\[【]([^\)\]】]{1,40})[\)\]】]")
@@ -653,26 +732,146 @@ class FieldValueResolverService:
             add(match.group(1), "quoted")
         text_without_quotes = quote_re.sub(" ", text_without_brackets)
 
+        # Treat a brand and an adjacent region/platform token as one lookup
+        # term even when the user omits brackets: "UNIQLO 日本", "UNIQLO日".
+        # Qualifiers come from canonical brand names in dict_brand_info so
+        # generic Chinese text is not blindly interpreted as a brand suffix.
+        qualifiers = self._brand_qualifiers(brand_values or [])
+        if qualifiers:
+            qualifier_pattern = "|".join(re.escape(item) for item in qualifiers)
+            brand_token_pattern = (
+                r"(?:[A-Za-z][A-Za-z0-9._&'’/-]*"
+                r"|[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]{2,32})"
+            )
+            qualified_phrase_re = re.compile(
+                rf"(?P<brand>{brand_token_pattern})\s*"
+                rf"(?P<qualifier>{qualifier_pattern})"
+            )
+            qualified_phrase_spans: list[tuple[int, int]] = []
+            for match in qualified_phrase_re.finditer(text_without_quotes):
+                raw_phrase = match.group(0)
+                base_text = match.group("brand")
+                base_key = normalize_lookup_value(base_text)
+                add(
+                    raw_phrase,
+                    "qualified_phrase",
+                    covers_base=True,
+                    base_key=base_key,
+                )
+                qualified_phrase_spans.append(match.span())
+        else:
+            qualified_phrase_spans = []
+
+        # Keep a qualified brand phrase as one semantic term. Without masking
+        # it here, the generic phrase regex can emit trailing terms such as
+        # "日本最近", which makes intent analysis look like it found another
+        # independent field value.
+        scan_text = text_without_quotes
+        if qualified_phrase_spans:
+            chars = list(scan_text)
+            for start, end in qualified_phrase_spans:
+                for index in range(start, end):
+                    chars[index] = " "
+            scan_text = "".join(chars)
+
         mixed_phrase_re = re.compile(
             r"(?=[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]{2,32})"
             r"(?=[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]*[A-Za-z])"
             r"(?=[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]*[\u3040-\u30ff\u3400-\u9fff])"
             r"[A-Za-z0-9._&'’/\-\u3040-\u30ff\u3400-\u9fff]{2,32}"
         )
-        for match in mixed_phrase_re.finditer(text_without_quotes):
+        for match in mixed_phrase_re.finditer(scan_text):
             add(match.group(0), "mixed_phrase")
 
         english_phrase_re = re.compile(
             r"[A-Za-z][A-Za-z0-9._&'’/-]*(?:\s+[A-Za-z0-9._&'’/-]+){0,5}",
         )
-        for match in english_phrase_re.finditer(text_without_quotes):
+        for match in english_phrase_re.finditer(scan_text):
             add(match.group(0), "phrase")
 
         chinese_phrase_re = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]{2,16}")
-        for match in chinese_phrase_re.finditer(text_without_quotes):
+        for match in chinese_phrase_re.finditer(scan_text):
             add(match.group(0), "phrase")
 
         return terms[:40]
+
+    def _brand_qualifiers(self, values: list[FieldValueCandidate]) -> list[str]:
+        qualifiers: set[str] = set()
+        for item in values:
+            for qualifier in self._bracket_qualifiers(item.value):
+                normalized = normalize_lookup_value(qualifier, drop_bracket_notes=False)
+                if not normalized:
+                    continue
+                qualifiers.add(qualifier)
+                # Allow short but meaningful omissions such as "日本" -> "日".
+                for length in range(1, len(qualifier)):
+                    prefix = qualifier[:length].strip()
+                    if normalize_lookup_value(prefix, drop_bracket_notes=False):
+                        qualifiers.add(prefix)
+        return sorted(qualifiers, key=lambda item: (len(item), item), reverse=True)
+
+    def _brand_qualified_candidates(
+        self,
+        *,
+        raw_value: str,
+        values: list[FieldValueCandidate],
+        table_name: str,
+        field_name: str,
+    ) -> list[FieldValueCandidate]:
+        """Limit fuzzy matching to a brand region/platform named by the user.
+
+        The canonical brand value carries the qualifier, while lookup variants
+        may carry only its English name. For example, both
+        ``优衣库（日本）`` variants and ``UNIQLO日本`` should remain eligible
+        for ``UNIQL 日本``; the unqualified ``优衣库（官网）`` candidate must
+        not win on usage count.
+        """
+        if (
+            str(table_name or "").strip().lower() != "dict_brand_info"
+            or str(field_name or "").strip().lower() != "name"
+        ):
+            return []
+
+        raw_key = normalize_lookup_value(raw_value, drop_bracket_notes=False)
+        if not raw_key:
+            return []
+
+        qualifier_candidates: list[tuple[str, str]] = []
+        seen_qualifiers: set[str] = set()
+        for item in values:
+            for qualifier in self._bracket_qualifiers(item.value):
+                qualifier_key = normalize_lookup_value(qualifier, drop_bracket_notes=False)
+                if not qualifier_key or qualifier_key in seen_qualifiers:
+                    continue
+                seen_qualifiers.add(qualifier_key)
+                qualifier_candidates.append((qualifier, qualifier_key))
+                for length in range(1, len(qualifier)):
+                    prefix = qualifier[:length].strip()
+                    prefix_key = normalize_lookup_value(prefix, drop_bracket_notes=False)
+                    if prefix_key and prefix_key not in seen_qualifiers:
+                        seen_qualifiers.add(prefix_key)
+                        qualifier_candidates.append((prefix, prefix_key))
+
+        # The qualifier is normally a suffix of the lookup phrase:
+        # "UNIQLO日本", "UNIQLO日", or "优衣库中国".
+        matching_qualifiers = [
+            item
+            for item in qualifier_candidates
+            if len(raw_key) > len(item[1]) and raw_key.endswith(item[1])
+        ]
+        if not matching_qualifiers:
+            return []
+        _, qualifier_key = max(matching_qualifiers, key=lambda item: len(item[1]))
+
+        qualified_values = [
+            item
+            for item in values
+            if any(
+                normalize_lookup_value(qualifier, drop_bracket_notes=False).startswith(qualifier_key)
+                for qualifier in self._bracket_qualifiers(item.value)
+            )
+        ]
+        return qualified_values
 
     def rewrite_sql_field_literals(
         self,
@@ -693,11 +892,15 @@ class FieldValueResolverService:
             semantic_name = _field_attr(field, "semantic_name")
             if not table_name or not field_name:
                 continue
+            table_aliases = self._sql_table_aliases(sql=rewritten, table_name=table_name)
+            if not table_aliases:
+                continue
             rewritten, field_changes = self._rewrite_direct_field_literals(
                 sql=rewritten,
                 table_name=table_name,
                 field_name=field_name,
                 semantic_name=semantic_name,
+                table_aliases=table_aliases,
             )
             changes.extend(field_changes)
         return rewritten, changes
@@ -722,6 +925,9 @@ class FieldValueResolverService:
             semantic_name = _field_attr(field, "semantic_name")
             if not table_name or not field_name:
                 continue
+            table_aliases = self._sql_table_aliases(sql=sql_text, table_name=table_name)
+            if not table_aliases:
+                continue
             values = self._load_field_values(table_name=table_name, field_name=field_name)
             if not values:
                 continue
@@ -733,6 +939,7 @@ class FieldValueResolverService:
                     field_name=field_name,
                     semantic_name=semantic_name,
                     candidate_values=values,
+                    table_aliases=table_aliases,
                 )
             )
 
@@ -748,8 +955,9 @@ class FieldValueResolverService:
         field_name: str,
         semantic_name: str,
         candidate_values: list[FieldValueCandidate],
+        table_aliases: set[str] | None = None,
     ) -> list[dict[str, Any]]:
-        column_pattern = self._sql_column_pattern(field_name)
+        column_pattern = self._sql_column_pattern(field_name, table_aliases=table_aliases)
         comparison_re = re.compile(
             rf"(?P<column>(?<![\w`]){column_pattern})\s*"
             rf"(?P<operator>NOT\s+LIKE|LIKE|=)\s*"
@@ -847,8 +1055,29 @@ class FieldValueResolverService:
         return self._dedupe_sql_issues(issues)
 
     def _free_text_like_issues(self, *, sql: str, intent: str = "") -> list[dict[str, Any]]:
+        brandname_re = re.compile(
+            r"(?<![\w`])(?:`?[A-Za-z_][A-Za-z0-9_]*`?\.)?"
+            r"`?(?P<field>BrandName)`?\s+"
+            r"(?P<operator>NOT\s+LIKE|LIKE)\s*"
+            r"(?P<literal>'(?:''|[^'])*')",
+            flags=re.IGNORECASE,
+        )
+        issues: list[dict[str, Any]] = []
+        for match in brandname_re.finditer(str(sql or "")):
+            issues.append(
+                {
+                    "type": "raw_brand_like_without_standard_dictionary",
+                    "semantic_name": "品牌",
+                    "table_name": "clothing_info",
+                    "field_name": match.group("field"),
+                    "operator": " ".join(match.group("operator").upper().split()),
+                    "raw_value": _unescape_sql_literal(match.group("literal")[1:-1]),
+                    "candidate_values": [],
+                }
+            )
+
         if self._explicit_free_text_intent(intent):
-            return []
+            return self._dedupe_sql_issues(issues)
         free_text_re = re.compile(
             r"(?<![\w`])(?:`?[A-Za-z_][A-Za-z0-9_]*`?\.)?"
             r"`?(?P<field>Name|NameEn|DescribeInfo|DescribeInfoEn)`?\s+"
@@ -856,7 +1085,6 @@ class FieldValueResolverService:
             r"(?P<literal>'(?:''|[^'])*')",
             flags=re.IGNORECASE,
         )
-        issues: list[dict[str, Any]] = []
         for match in free_text_re.finditer(str(sql or "")):
             issues.append(
                 {
@@ -904,8 +1132,9 @@ class FieldValueResolverService:
         table_name: str,
         field_name: str,
         semantic_name: str,
+        table_aliases: set[str] | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
-        column_pattern = self._sql_column_pattern(field_name)
+        column_pattern = self._sql_column_pattern(field_name, table_aliases=table_aliases)
         comparison_re = re.compile(
             rf"(?P<column>(?<![\w`]){column_pattern})\s*"
             rf"(?P<operator>NOT\s+LIKE|LIKE|=)\s*"
@@ -975,9 +1204,31 @@ class FieldValueResolverService:
         sql = in_re.sub(replace_in, sql)
         return sql, changes
 
-    def _sql_column_pattern(self, field_name: str) -> str:
+    def _sql_table_aliases(self, *, sql: str, table_name: str) -> set[str]:
+        table_key = str(table_name or "").strip()
+        if not table_key:
+            return set()
+        table_pattern = re.escape(table_key)
+        reference_re = re.compile(
+            rf"\b(?:FROM|JOIN)\s+`?{table_pattern}`?"
+            rf"(?:\s+(?:AS\s+)?`?(?P<alias>[A-Za-z_][A-Za-z0-9_]*)`?)?",
+            flags=re.IGNORECASE,
+        )
+        aliases: set[str] = set()
+        for match in reference_re.finditer(str(sql or "")):
+            alias = str(match.group("alias") or "").strip()
+            aliases.add(alias or table_key)
+        return aliases
+
+    def _sql_column_pattern(self, field_name: str, *, table_aliases: set[str] | None = None) -> str:
         quoted_field = re.escape(field_name)
-        table_or_alias = r"(?:`?[A-Za-z_][A-Za-z0-9_]*`?\.)?"
+        if table_aliases:
+            qualifiers = "|".join(
+                rf"`?{re.escape(alias)}`?" for alias in sorted(table_aliases, key=len, reverse=True)
+            )
+            table_or_alias = rf"(?:{qualifiers}\.)?"
+        else:
+            table_or_alias = r"(?:`?[A-Za-z_][A-Za-z0-9_]*`?\.)?"
         return rf"{table_or_alias}`?{quoted_field}`?"
 
     def _candidate_fields(self, *, scene: Any, queryable_fields: list[Any] | None = None) -> list[Any]:
@@ -1007,6 +1258,8 @@ class FieldValueResolverService:
             return False
         normalized_field_name = field_name.replace("_", "").lower()
         if normalized_field_name in EXCLUDED_FIELD_NAMES:
+            if "brand" in table_name and field_name in {"Name", "NameEn", "Alias"}:
+                return True
             return field_name == "Name" and any(hint in table_name for hint in LOOKUP_TABLE_HINTS_FOR_NAME)
         searchable = f"{semantic_name} {field_name} {table_name}".lower()
         if any(keyword in searchable for keyword in LOOKUP_SEMANTIC_KEYWORDS):
@@ -1023,6 +1276,11 @@ class FieldValueResolverService:
         now = time.time()
         if cached and now - cached[0] <= self.cache_ttl_seconds:
             return cached[1]
+
+        if table_key.lower() == "dict_brand_info" and field_key == "Name":
+            values = self._load_standard_brand_values()
+            self._value_cache[cache_key] = (now, values)
+            return values
 
         try:
             table_sql = _quote_identifier(table_key)
@@ -1065,13 +1323,184 @@ class FieldValueResolverService:
         self._value_cache[cache_key] = (now, values)
         return values
 
-    def _best_count_candidate(self, candidates: list[FieldValueCandidate]) -> FieldValueCandidate:
-        return sorted(candidates, key=lambda item: (item.count, len(item.value)), reverse=True)[0]
+    def _load_standard_brand_values(self) -> list[FieldValueCandidate]:
+        query = """
+            SELECT
+              CAST(db.`Name` AS CHAR) AS canonical_value,
+              CAST(db.`NameEn` AS CHAR) AS name_en,
+              CAST(db.`Alias` AS CHAR) AS alias_value,
+              CAST(db.`Code` AS CHAR) AS code_value,
+              COUNT(ci.`Id`) AS usage_count,
+              COALESCE(
+                SUM(
+                  CASE
+                    WHEN ci.`ReceiveTime` IS NOT NULL
+                     AND DATE(ci.`ReceiveTime`) >= DATE_SUB(
+                       (SELECT MAX(DATE(`ReceiveTime`)) FROM `clothing_info`),
+                       INTERVAL 30 DAY
+                     )
+                    THEN 1
+                    ELSE 0
+                  END
+                ),
+                0
+              ) AS recent_count
+            FROM `dict_brand_info` db
+            LEFT JOIN `clothing_info` ci
+              ON ci.`BrandCode` = db.`Code`
+            WHERE db.`Name` IS NOT NULL
+              AND TRIM(CAST(db.`Name` AS CHAR)) <> ''
+            GROUP BY db.`Code`, db.`Name`, db.`NameEn`, db.`Alias`
+            ORDER BY usage_count DESC, canonical_value ASC
+            LIMIT %s
+        """
+        try:
+            conn = pymysql.connect(**_mysql_config())
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(query, (self.max_distinct_values + 1,))
+                    rows = cur.fetchall() or []
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            return []
+
+        if len(rows) > self.max_distinct_values:
+            return []
+
+        candidates: list[FieldValueCandidate] = []
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            canonical = str(row.get("canonical_value") or "").strip()
+            if not canonical:
+                continue
+            variants = [
+                canonical,
+                row.get("name_en"),
+                row.get("alias_value"),
+                row.get("code_value"),
+            ]
+            qualifiers = self._bracket_qualifiers(canonical)
+            usage_count = int(row.get("usage_count") or 0)
+            recent_count = int(row.get("recent_count") or 0)
+            for variant in variants:
+                for value in self._split_lookup_variants(variant):
+                    normalized = normalize_lookup_value(value, drop_bracket_notes=False)
+                    if not normalized:
+                        continue
+                    key = (canonical, normalized)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidates.append(
+                        FieldValueCandidate(
+                            value=canonical,
+                            count=usage_count,
+                            normalized=normalized,
+                            recent_count=recent_count,
+                        )
+                    )
+                    # Also index the canonical name without its bracketed
+                    # qualifier. For example, bare "优衣库" should resolve
+                    # to all qualified candidates ("官网"/"日本"/"中国")
+                    # and let the normal count ordering choose the default.
+                    base_normalized = normalize_lookup_value(canonical)
+                    base_key = (canonical, base_normalized)
+                    if base_normalized and base_key not in seen:
+                        seen.add(base_key)
+                        candidates.append(
+                            FieldValueCandidate(
+                                value=canonical,
+                                count=usage_count,
+                                normalized=base_normalized,
+                                recent_count=recent_count,
+                            )
+                        )
+                    # A region-qualified English input such as
+                    # "UNIQLO（中国）" combines the dictionary's English name
+                    # with the qualifier stored in the canonical Chinese name.
+                    # Keep the canonical output as Name while making that
+                    # combined spelling an exact lookup variant.
+                    if value != canonical:
+                        for qualifier in qualifiers:
+                            for qualified_value in (
+                                f"{value}（{qualifier}）",
+                                f"{value}({qualifier})",
+                                f"{value} {qualifier}",
+                            ):
+                                qualified_normalized = normalize_lookup_value(
+                                    qualified_value,
+                                    drop_bracket_notes=False,
+                                )
+                                qualified_key = (canonical, qualified_normalized)
+                                if not qualified_normalized or qualified_key in seen:
+                                    continue
+                                seen.add(qualified_key)
+                                candidates.append(
+                                    FieldValueCandidate(
+                                        value=canonical,
+                                        count=usage_count,
+                                        normalized=qualified_normalized,
+                                        recent_count=recent_count,
+                                    )
+                                )
+        return candidates
+
+    def _bracket_qualifiers(self, value: Any) -> list[str]:
+        text = unicodedata.normalize("NFKC", str(value or "")).strip()
+        if not text:
+            return []
+        qualifiers: list[str] = []
+        seen: set[str] = set()
+        for match in re.finditer(r"[\(\[【]([^\)\]】]{1,40})[\)\]】]", text):
+            qualifier = str(match.group(1) or "").strip()
+            key = normalize_lookup_value(qualifier, drop_bracket_notes=False)
+            if not qualifier or not key or key in seen:
+                continue
+            seen.add(key)
+            qualifiers.append(qualifier)
+        return qualifiers
+
+    def _split_lookup_variants(self, value: Any) -> list[str]:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        parts = re.split(r"[,，、;/|]+", text)
+        result: list[str] = []
+        seen: set[str] = set()
+        for part in [text, *parts]:
+            item = str(part or "").strip()
+            if not item:
+                continue
+            key = item.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    def _best_count_candidate(
+        self,
+        candidates: list[FieldValueCandidate],
+        *,
+        prefer_recent: bool = False,
+    ) -> FieldValueCandidate:
+        return sorted(
+            candidates,
+            key=lambda item: (
+                item.recent_count if prefer_recent else 0,
+                item.count,
+                len(item.value),
+            ),
+            reverse=True,
+        )[0]
 
     def _fuzzy_matches(
         self,
         raw_key: str,
         values: list[FieldValueCandidate],
+        *,
+        prefer_recent: bool = False,
     ) -> list[tuple[float, FieldValueCandidate]]:
         if len(raw_key) < 5:
             return []
@@ -1081,14 +1510,32 @@ class FieldValueResolverService:
                 continue
             score = SequenceMatcher(None, raw_key, item.normalized).ratio()
             matches.append((score, item))
-        return sorted(matches, key=lambda item: (item[0], item[1].count), reverse=True)
+        return sorted(
+            matches,
+            key=lambda item: (
+                item[0],
+                item[1].recent_count if prefer_recent else 0,
+                item[1].count,
+            ),
+            reverse=True,
+        )
 
-    def _accept_fuzzy_match(self, raw_key: str, candidate_key: str, score: float, second_score: float) -> bool:
-        if len(raw_key) < 8 and score < 0.94:
+    def _accept_fuzzy_match(
+        self,
+        raw_key: str,
+        candidate_key: str,
+        score: float,
+        second_score: float,
+        *,
+        qualified_phrase: bool = False,
+    ) -> bool:
+        if not qualified_phrase and len(raw_key) < 8 and score < 0.94:
             return False
         length_ratio = min(len(raw_key), len(candidate_key)) / max(len(raw_key), len(candidate_key))
         if length_ratio < 0.72:
             return False
+        if qualified_phrase:
+            return score >= 0.9
         return score >= 0.9 and (score >= 0.97 or score - second_score >= 0.04)
 
     def _resolved_payload(

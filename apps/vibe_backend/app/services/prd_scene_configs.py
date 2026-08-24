@@ -169,6 +169,26 @@ VISUAL_ANALYSIS_RELATIONS = [
     _relation("clothing_info", "Id", "clothing_texture_info", "ClothingId", "LEFT", "商品到肌理/织造/图案工艺识别结果，一对一或一对多关系，统计时需要COUNT DISTINCT商品ID。"),
 ]
 
+STANDARD_BRAND_FIELD = _field(
+    "品牌",
+    "dict_brand_info",
+    "Name",
+    "dimension",
+    "标准品牌名称，来自品牌字典；输入 UNIQLO、uniqlo、优衣库（中国）等写法时应先解析到该标准值，再通过 BrandCode 关联商品。",
+    required=True,
+    aliases=["品牌", "标准品牌", "Brand", "BrandName", "Name", "NameEn", "Alias", "UNIQLO"],
+    er_path="dict_brand_info.Code = clothing_info.BrandCode",
+)
+
+STANDARD_BRAND_RELATION = _relation(
+    "dict_brand_info",
+    "Code",
+    "clothing_info",
+    "BrandCode",
+    "LEFT",
+    "标准品牌字典到商品主表；品牌筛选和分组优先使用 dict_brand_info.Name，禁止用 clothing_info.BrandName LIKE 混合不同地区品牌。",
+)
+
 
 COMPETITOR_SCENE_ID = "scene_prd_competitor"
 COMPETITOR_SCENE_NAME = "竞品与价格分析"
@@ -190,7 +210,7 @@ COMPETITOR_SCENE_SAMPLE_GOALS = [
 COMPETITOR_SCENE_FIELDS = [
     _field("商品ID", "clothing_info", "Id", "filter", "SKU唯一标识，用于COUNT DISTINCT和多表去重。", required=True, aliases=["Id", "SKU", "商品ID"]),
     _field("商品名称", "clothing_info", "Name", "dimension", "商品展示名称，用于下钻到具体竞品商品。", aliases=["Name", "商品名", "商品名称"]),
-    _field("品牌", "clothing_info", "BrandName", "dimension", "竞品对比的核心主体。", required=True, aliases=["BrandName", "品牌"]),
+    STANDARD_BRAND_FIELD,
     _field("一级类目", "clothing_info", "Category", "dimension", "竞品分析的主品类维度。", aliases=["Category", "一级品类", "一级类目"]),
     _field("二级类目", "clothing_info", "SubCategory", "dimension", "同品类竞品对比的主要细分维度。", required=True, aliases=["SubCategory", "二级品类", "二级类目"]),
     _field("叶子类目", "clothing_info", "LeafCategory", "dimension", "更细粒度的竞品定位维度。", aliases=["LeafCategory", "叶子类目"]),
@@ -198,14 +218,19 @@ COMPETITOR_SCENE_FIELDS = [
     _field("原始标价", "clothing_info", "OriginalPrice", "metric", "原始站点标价字符串，存在币种信息；未做币种统一前不要直接作为折扣率分母。", aliases=["OriginalPrice", "原价", "吊牌价", "原始标价"]),
     _field("抓取日期", "clothing_info", "ReceiveTime", "time", "用于最近窗口、批次和聚合趋势。", aliases=["ReceiveTime", "抓取时间", "抓取日期"]),
     _field("来源站点域名", "clothing_info", "SourceUrl", "dimension", "从SourceUrl提取域名作为来源站点口径，不等同于销售平台。", aliases=["SourceUrl", "来源站点", "站点域名"]),
-    _field("材质名称", "clothing_fiber_info", "Name", "filter", "商品材质标签，用于品牌材质覆盖对比。", aliases=["材质", "材质名称", "Fiber", "Name"], er_path="clothing_info.Id = clothing_fiber_info.ClothingId"),
+    _field("纤维编码", "clothing_fiber_info", "Code", "dimension", "商品纤维编码，用于连接标准纤维字典。", aliases=["Code", "纤维编码"], er_path="clothing_info.Id = clothing_fiber_info.ClothingId"),
+    _field("纤维占比", "clothing_fiber_info", "Percent", "metric", "商品纤维成分占比。", aliases=["Percent", "纤维占比"], unit="ratio", aggregation="sum/avg", er_path="clothing_info.Id = clothing_fiber_info.ClothingId"),
+    _field("标准纤维名称", "dict_fiber_info", "Name", "dimension", "标准纤维字典名称，用于统一展示材质名称。", aliases=["材质", "材质名称", "Fiber", "Name", "标准纤维名称"], er_path="clothing_info.Id = clothing_fiber_info.ClothingId; clothing_fiber_info.Code = dict_fiber_info.Code"),
+    _field("纤维标准编码", "dict_fiber_info", "Code", "dimension", "标准纤维字典编码，用于和成分编码对齐。", aliases=["Code", "纤维标准编码"], er_path="clothing_info.Id = clothing_fiber_info.ClothingId; clothing_fiber_info.Code = dict_fiber_info.Code"),
     _field("功能标签", "clothing_functions_info", "Functionality", "filter", "商品功能标签，用于功能覆盖和功能价格差异。", aliases=["功能", "功能标签", "Functionality"], er_path="clothing_info.Id = clothing_functions_info.ClothingId"),
     _field("场景标签", "clothing_scene_info", "Scene", "filter", "商品适用场景标签，用于场景内竞品对比。", aliases=["Scene", "场景", "场景标签"], er_path="clothing_info.Id = clothing_scene_info.ClothingId"),
     *VISUAL_ANALYSIS_FIELDS,
 ]
 
 COMPETITOR_SCENE_RELATIONS = [
+    STANDARD_BRAND_RELATION,
     _relation("clothing_info", "Id", "clothing_fiber_info", "ClothingId", "LEFT", "商品到材质，多值关系，统计时需要COUNT DISTINCT商品ID。"),
+    _relation("clothing_fiber_info", "Code", "dict_fiber_info", "Code", "LEFT", "纤维编码到标准纤维字典，取标准纤维名称作为统一成分展示。"),
     _relation("clothing_info", "Id", "clothing_functions_info", "ClothingId", "LEFT", "商品到功能标签，多值关系，统计时需要COUNT DISTINCT商品ID。"),
     _relation("clothing_info", "Id", "clothing_scene_info", "ClothingId", "LEFT", "商品到场景标签，多值关系，统计时需要COUNT DISTINCT商品ID。"),
     *VISUAL_ANALYSIS_RELATIONS,
@@ -219,7 +244,7 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "竞品品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "竞品品牌分组"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "同品类竞品分组范围"),
             _requirement("价格", "clothing_info", "Price", "metric", "价格带分桶依据"),
             _requirement("抓取日期", "clothing_info", "ReceiveTime", "time", "最近30天窗口"),
@@ -245,7 +270,7 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "竞品品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "竞品品牌分组"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "同品类对比范围"),
             _requirement("价格", "clothing_info", "Price", "metric", "均价、最高价、最低价和价差"),
         ],
@@ -266,12 +291,12 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌覆盖统计"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌覆盖统计"),
             _requirement("价格", "clothing_info", "Price", "metric", "均价统计"),
             _requirement("来源站点域名", "clothing_info", "SourceUrl", "dimension", "来源站点分组口径"),
         ],
         "derived_metrics": [
-            {"name": "品牌覆盖数", "formula": "COUNT(DISTINCT BrandName)"},
+            {"name": "品牌覆盖数", "formula": "COUNT(DISTINCT dict_brand_info.Code)"},
             {"name": "SKU数", "formula": "COUNT(DISTINCT Id)"},
             {"name": "平均价", "formula": "AVG(Price)"},
         ],
@@ -287,7 +312,7 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "竞品品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "竞品品牌分组"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "重叠品类识别"),
             _requirement("价格", "clothing_info", "Price", "metric", "品牌均价和价差"),
         ],
@@ -308,19 +333,22 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "多值材质关联下的去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("价格", "clothing_info", "Price", "metric", "材质下均价"),
-            _requirement("材质名称", "clothing_fiber_info", "Name", "filter", "材质覆盖维度"),
+            _requirement("纤维编码", "clothing_fiber_info", "Code", "dimension", "连接标准纤维字典的编码"),
+            _requirement("纤维占比", "clothing_fiber_info", "Percent", "metric", "成分占比"),
+            _requirement("标准纤维名称", "dict_fiber_info", "Name", "dimension", "标准材质名称"),
+            _requirement("纤维标准编码", "dict_fiber_info", "Code", "dimension", "标准材质编码"),
         ],
         "derived_metrics": [
-            {"name": "材质覆盖数", "formula": "COUNT(DISTINCT clothing_fiber_info.Name)"},
+            {"name": "材质覆盖数", "formula": "COUNT(DISTINCT dict_fiber_info.Code)"},
             {"name": "SKU数", "formula": "COUNT(DISTINCT clothing_info.Id)"},
             {"name": "平均价", "formula": "AVG(clothing_info.Price)"},
         ],
-        "group_by": ["品牌", "材质名称"],
+        "group_by": ["品牌", "标准纤维名称"],
         "sort": [{"metric": "SKU数", "direction": "DESC"}],
         "limit": 50,
-        "notes": ["材质表是一对多关系，必须COUNT DISTINCT商品ID"],
+        "notes": ["材质表是一对多关系，必须COUNT DISTINCT商品ID", "标准材质名称来自 dict_fiber_info（由 dict_info 纤维子树映射而来）"],
     },
     {
         "preset_key": "competitor_function_coverage_price",
@@ -329,7 +357,7 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "多值功能关联下的去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("价格", "clothing_info", "Price", "metric", "功能下均价"),
             _requirement("功能标签", "clothing_functions_info", "Functionality", "filter", "功能覆盖维度"),
         ],
@@ -350,7 +378,7 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "多表关联下的去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "同品类竞品范围"),
             _requirement("图案", "clothing_pattern_info", "pattern", "dimension", "图案结构维度"),
             _requirement("肌理", "clothing_texture_info", "Texture", "dimension", "肌理结构维度"),
@@ -372,7 +400,7 @@ COMPETITOR_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "多表关联下的去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("织造方式", "clothing_texture_info", "FabricType", "dimension", "织造方式覆盖"),
             _requirement("工艺类型", "clothing_texture_info", "PatternTechnique", "dimension", "图案/表面工艺覆盖"),
         ],
@@ -415,7 +443,7 @@ STRUCTURE_SCENE_SAMPLE_GOALS = [
 STRUCTURE_SCENE_FIELDS = [
     _field("商品ID", "clothing_info", "Id", "filter", "SKU唯一标识，用于结构统计去重。", required=True, aliases=["Id", "SKU", "商品ID"]),
     _field("商品名称", "clothing_info", "Name", "dimension", "商品下钻展示名称。", aliases=["Name", "商品名", "商品名称"]),
-    _field("品牌", "clothing_info", "BrandName", "dimension", "品牌结构分析维度。", required=True, aliases=["BrandName", "品牌"]),
+    STANDARD_BRAND_FIELD,
     _field("一级类目", "clothing_info", "Category", "dimension", "商品结构的主品类维度。", required=True, aliases=["Category", "一级类目", "一级品类"]),
     _field("二级类目", "clothing_info", "SubCategory", "dimension", "商品结构的细分品类维度。", required=True, aliases=["SubCategory", "二级类目", "二级品类"]),
     _field("叶子类目", "clothing_info", "LeafCategory", "dimension", "SKU丰富度和品类深度维度。", aliases=["LeafCategory", "叶子类目"]),
@@ -431,6 +459,7 @@ STRUCTURE_SCENE_FIELDS = [
 ]
 
 STRUCTURE_SCENE_RELATIONS = [
+    STANDARD_BRAND_RELATION,
     _relation("clothing_info", "Id", "clothing_scene_info", "ClothingId", "LEFT", "商品到场景标签，多值关系，统计时需要COUNT DISTINCT商品ID。"),
     *VISUAL_ANALYSIS_RELATIONS,
 ]
@@ -443,7 +472,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("一级类目", "clothing_info", "Category", "dimension", "一级结构分组"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "二级结构分组"),
         ],
@@ -463,7 +492,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "覆盖宽度"),
             _requirement("叶子类目", "clothing_info", "LeafCategory", "dimension", "覆盖深度"),
         ],
@@ -484,11 +513,11 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌覆盖统计"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌覆盖统计"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "品类分组"),
         ],
         "derived_metrics": [
-            {"name": "品牌覆盖数", "formula": "COUNT(DISTINCT BrandName)"},
+            {"name": "品牌覆盖数", "formula": "COUNT(DISTINCT dict_brand_info.Code)"},
             {"name": "SKU数", "formula": "COUNT(DISTINCT Id)"},
         ],
         "group_by": ["二级类目"],
@@ -503,7 +532,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("颜色", "clothing_info", "ColorName", "dimension", "颜色结构维度"),
         ],
         "derived_metrics": [
@@ -523,7 +552,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "图片颜色多值关联下的去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("Pantone色号", "clothing_images_color", "PantoneId", "dimension", "图片识别色号"),
             _requirement("图片颜色占比", "clothing_images_color", "Percent", "metric", "主色判定依据"),
         ],
@@ -547,7 +576,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "多表关联下的去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("图案", "clothing_pattern_info", "pattern", "dimension", "图案结构"),
             _requirement("肌理", "clothing_texture_info", "Texture", "dimension", "肌理结构"),
             _requirement("织造方式", "clothing_texture_info", "FabricType", "dimension", "织造方式结构"),
@@ -571,7 +600,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("二级类目", "clothing_info", "SubCategory", "dimension", "上新品类结构"),
             _requirement("上架时间", "clothing_info", "CreateTime", "time", "上新窗口"),
         ],
@@ -611,7 +640,7 @@ STRUCTURE_SCENE_QUESTION_MATRIX = [
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "候选商品唯一标识"),
             _requirement("商品名称", "clothing_info", "Name", "dimension", "候选商品展示"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌展示"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌展示"),
             _requirement("一级类目", "clothing_info", "Category", "dimension", "类目展示"),
             _requirement("中文详情", "clothing_info", "DescribeInfo", "filter", "尺码/尺寸中文文本线索"),
             _requirement("外文详情", "clothing_info", "DescribeInfoEn", "filter", "SIZE TABLE/サイズ文本线索"),
@@ -664,7 +693,7 @@ TREND_SCENE_FIELDS = [
     _field("商品ID", "clothing_info", "Id", "filter", "SKU唯一标识，用于趋势统计去重。", required=True, aliases=["Id", "SKU", "商品ID"]),
     _field("商品名称", "clothing_info", "Name", "dimension", "潜在重点商品下钻展示。", aliases=["Name", "商品名", "商品名称"]),
     _field("商品源ID", "clothing_info", "ProductId", "filter", "来源商品ID；当前数据没有跨日期重复快照，不能支撑同一商品价格历史。", aliases=["ProductId", "商品源ID", "源商品ID"]),
-    _field("品牌", "clothing_info", "BrandName", "dimension", "品牌趋势分组。", required=True, aliases=["BrandName", "品牌"]),
+    STANDARD_BRAND_FIELD,
     _field("一级类目", "clothing_info", "Category", "dimension", "品类趋势分组。", required=True, aliases=["Category", "一级类目", "一级品类"]),
     _field("二级类目", "clothing_info", "SubCategory", "dimension", "细分品类趋势分组。", aliases=["SubCategory", "二级类目", "二级品类"]),
     _field("价格", "clothing_info", "Price", "metric", "聚合价格趋势和高价值商品识别指标。", required=True, aliases=["Price", "价格", "售价"], unit="price", aggregation="avg/min/max"),
@@ -678,6 +707,7 @@ TREND_SCENE_FIELDS = [
 ]
 
 TREND_SCENE_RELATIONS = [
+    STANDARD_BRAND_RELATION,
     _relation("clothing_info", "Id", "clothing_functions_info", "ClothingId", "LEFT", "商品到功能标签，多值关系，统计时需要COUNT DISTINCT商品ID。"),
     _relation("clothing_info", "Id", "clothing_scene_info", "ClothingId", "LEFT", "商品到场景标签，多值关系，统计时需要COUNT DISTINCT商品ID。"),
     *VISUAL_ANALYSIS_RELATIONS,
@@ -709,12 +739,12 @@ TREND_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "新增SKU去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("上架时间", "clothing_info", "CreateTime", "time", "每日上新时间口径"),
         ],
         "derived_metrics": [
             {"name": "新增SKU数", "formula": "COUNT(DISTINCT Id)"},
-            {"name": "品牌日环比变化", "formula": "新增SKU数 - LAG(新增SKU数) OVER(PARTITION BY BrandName)"},
+            {"name": "品牌日环比变化", "formula": "新增SKU数 - LAG(新增SKU数) OVER(PARTITION BY dict_brand_info.Name)"},
         ],
         "group_by": ["品牌", "上架日期"],
         "sort": [{"metric": "上架日期", "direction": "ASC"}, {"metric": "新增SKU数", "direction": "DESC"}],
@@ -728,7 +758,7 @@ TREND_SCENE_QUESTION_MATRIX = [
         "editable": True,
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "SKU数去重基准"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌分组"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌分组"),
             _requirement("抓取日期", "clothing_info", "ReceiveTime", "time", "最近抓取批次"),
         ],
         "derived_metrics": [
@@ -766,7 +796,7 @@ TREND_SCENE_QUESTION_MATRIX = [
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "商品唯一标识"),
             _requirement("商品名称", "clothing_info", "Name", "dimension", "商品展示"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌展示"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌展示"),
             _requirement("一级类目", "clothing_info", "Category", "dimension", "品类展示"),
             _requirement("价格", "clothing_info", "Price", "metric", "高价值阈值"),
             _requirement("上架时间", "clothing_info", "CreateTime", "time", "最近上架窗口"),
@@ -834,7 +864,7 @@ TREND_SCENE_QUESTION_MATRIX = [
         "field_requirements": [
             _requirement("商品ID", "clothing_info", "Id", "filter", "商品唯一标识"),
             _requirement("商品名称", "clothing_info", "Name", "dimension", "商品展示"),
-            _requirement("品牌", "clothing_info", "BrandName", "dimension", "品牌展示"),
+            _requirement("品牌", "dict_brand_info", "Name", "dimension", "品牌展示"),
             _requirement("价格", "clothing_info", "Price", "metric", "高价值阈值"),
             _requirement("上架时间", "clothing_info", "CreateTime", "time", "最近上架窗口"),
             _requirement("图案", "clothing_pattern_info", "pattern", "dimension", "图案特征"),

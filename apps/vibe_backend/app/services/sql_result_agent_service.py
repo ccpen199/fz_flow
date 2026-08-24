@@ -131,7 +131,10 @@ class SqlResultAgentService:
                     query_plan.metrics = list(price_band_override["metrics"])
                 if price_band_override.get("dimensions"):
                     query_plan.dimensions = list(price_band_override["dimensions"])
-                if price_band_override.get("time_window") is not None:
+                if "time_window" in price_band_override:
+                    # Keep the displayed plan aligned with the generated SQL.
+                    # In particular, an edited question without a date scope
+                    # must clear a preset/LLM-inferred recent window.
                     query_plan.time_window = price_band_override["time_window"]
                 query_plan.risk_notes = [
                     *query_plan.risk_notes,
@@ -627,12 +630,10 @@ class SqlResultAgentService:
         if str(time_field.get("table_name") or "").strip() != str(table_name or "").strip():
             return None
 
-        recent_days = self._price_band_recent_days(
-            intent,
-            query_plan.time_window,
-            selected_preset.get("question") if isinstance(selected_preset, dict) else "",
-            " ".join(str(item) for item in (selected_preset.get("notes") or []) if str(item).strip()) if isinstance(selected_preset, dict) else "",
-        )
+        # The edited user intent owns the time scope. A preset can provide the
+        # grouping and price-band rules, but its sample question/notes must not
+        # reintroduce "recent 30 days" after the user removes that phrase.
+        recent_days = self._price_band_recent_days(intent)
         if recent_days is None:
             return None
 
@@ -886,6 +887,44 @@ class SqlResultAgentService:
                     left = self._price_band_sql_literal(self._price_band_coerce_number(raw_value[0]))
                     right = self._price_band_sql_literal(self._price_band_coerce_number(raw_value[1]))
                     clauses.append(f"{target_expr} BETWEEN {left} AND {right}")
+            elif field_table == "dict_brand_info" and base_table_name == "clothing_info":
+                # Standard brand values live in the dictionary view and are
+                # related to clothing_info through BrandCode. Keep this
+                # relation explicit so price-band SQL never falls back to
+                # clothing_info.BrandName text matching.
+                dictionary_expr = f"db.`{field_name}`"
+                brand_predicate = ""
+                if operator == "in" and isinstance(raw_value, list):
+                    items: list[str] = []
+                    for item in raw_value:
+                        if str(item or "").strip() == "":
+                            continue
+                        resolved = field_value_resolver_service.canonicalize_value_for_field(
+                            table_name=field_table,
+                            field_name=field_name,
+                            semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                            raw_value=item,
+                        )
+                        items.append(self._price_band_sql_literal(resolved))
+                    if items:
+                        brand_predicate = f"{dictionary_expr} IN ({', '.join(items)})"
+                elif operator in {"=", "=="}:
+                    resolved = field_value_resolver_service.canonicalize_value_for_field(
+                        table_name=field_table,
+                        field_name=field_name,
+                        semantic_name=str(field.get("semantic_name") or semantic_name).strip(),
+                        raw_value=raw_value,
+                    )
+                    brand_predicate = f"{dictionary_expr} = {self._price_band_sql_literal(resolved)}"
+                if brand_predicate:
+                    clauses.append(
+                        "EXISTS ("
+                        "SELECT 1 FROM `dict_brand_info` db "
+                        f"WHERE db.`Code` = {base_alias}.`BrandCode` AND {brand_predicate}"
+                        ")"
+                    )
+                else:
+                    unsupported = True
             elif field_table == "clothing_scene_info" and base_table_name == "clothing_info":
                 scene_expr = f"s.`{field_name}`"
                 predicate = ""
@@ -1031,9 +1070,23 @@ class SqlResultAgentService:
             field = field_lookup.get(self._normalize_text(semantic_name))
             if not field:
                 continue
-            if str(field.get("table_name") or "").strip() != table_name:
+            field_table = str(field.get("table_name") or "").strip()
+            if field_table != table_name and not (
+                field_table == "dict_brand_info" and table_name == "clothing_info"
+            ):
                 return None
             group_fields.append(field)
+
+        brand_grouped = any(
+            str(field.get("table_name") or "").strip() == "dict_brand_info"
+            for field in group_fields
+        )
+
+        def group_field_expression(field: dict[str, Any]) -> str:
+            field_table = str(field.get("table_name") or "").strip()
+            field_name = str(field.get("field_name") or "").strip()
+            alias = "db" if field_table == "dict_brand_info" else "ci"
+            return f"{alias}.`{field_name}`"
 
         policy = dict(price_band_policy or {})
         mode = str(policy.get("mode") or policy.get("default_mode") or "adaptive").strip().lower()
@@ -1090,7 +1143,10 @@ class SqlResultAgentService:
 
         base_select_parts = [
             f"ci.`{id_field['field_name']}` AS `sku_id`",
-            *[f"ci.`{field['field_name']}` AS `{field['semantic_name']}`" for field in group_fields],
+            *[
+                f"{group_field_expression(field)} AS `{field['semantic_name']}`"
+                for field in group_fields
+            ],
             f"ci.`{price_field['field_name']}` AS `price`",
         ]
 
@@ -1116,6 +1172,8 @@ class SqlResultAgentService:
                 ]
             )
             base_from = f"FROM `{table_name}` ci"
+            if brand_grouped:
+                base_from += " LEFT JOIN `dict_brand_info` db ON db.`Code` = ci.`BrandCode`"
             if time_context is not None:
                 base_from += " JOIN anchor a"
             base_sql = f"base AS (SELECT {', '.join(base_select_parts)} {base_from} WHERE {' AND '.join(base_conditions)})"
@@ -1145,8 +1203,7 @@ class SqlResultAgentService:
                 f"SELECT {', '.join(final_select)} FROM band_counts "
                 f"ORDER BY {order_clause}"
             )
-            query_time_window = str(query_plan.time_window).strip() if query_plan.time_window is not None else ""
-            time_window = time_context["time_window"] if time_context is not None else (query_time_window or None)
+            time_window = time_context["time_window"] if time_context is not None else None
             return {
                 "sql": sql,
                 "sql_explanation": (
@@ -1169,6 +1226,8 @@ class SqlResultAgentService:
         band_group_select = ", ".join(group_aliases + ["`band_order`"]) if group_aliases else "`band_order`"
         band_group_by = band_group_select
         base_from = f"FROM `{table_name}` ci"
+        if brand_grouped:
+            base_from += " LEFT JOIN `dict_brand_info` db ON db.`Code` = ci.`BrandCode`"
         if time_context is not None:
             base_from += " JOIN anchor a"
         boundary_kind = "none"
@@ -1355,8 +1414,7 @@ class SqlResultAgentService:
             f"SELECT {', '.join(final_select)} FROM band_rollup "
             f"ORDER BY {order_clause}"
         )
-        query_time_window = str(query_plan.time_window).strip() if query_plan.time_window is not None else ""
-        time_window = time_context["time_window"] if time_context is not None else (query_time_window or None)
+        time_window = time_context["time_window"] if time_context is not None else None
         if strategy == "equal_width":
             strategy_note = "等宽区间，按每组最低价到最高价均分价格范围，区间宽度一致但SKU数可能不均"
             if boundary_kind == "rounded":
@@ -1544,6 +1602,11 @@ class SqlResultAgentService:
             elif issue_type == "free_text_like_without_explicit_intent":
                 notes.append(
                     f"未明确要求按商品文本搜索时，不允许用 {field_name} {operator} '{raw_value}' 代替品牌/品类等标准字段过滤。"
+                )
+            elif issue_type == "raw_brand_like_without_standard_dictionary":
+                notes.append(
+                    f"品牌不能使用原始抓取字段模糊匹配：clothing_info.{field_name} {operator} '{raw_value}'。"
+                    "应通过 dict_brand_info.Name 标准品牌值和 clothing_info.BrandCode 精确过滤。"
                 )
             else:
                 notes.append(

@@ -20,6 +20,7 @@ app/routers/slides.py
 app/routers/sql_result_agent.py
 app/services/__init__.py
 app/services/artifact_service.py
+app/services/dictionary_view_bootstrap.py
 app/services/field_value_resolver_service.py
 app/services/insight_narrative_service.py
 app/services/latest_scene_config.py

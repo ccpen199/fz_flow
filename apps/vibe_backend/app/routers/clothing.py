@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 import os
 from decimal import Decimal
+from collections import Counter
+from functools import lru_cache
 from typing import Literal
 
 import pymysql
@@ -41,7 +44,83 @@ def _normalize_decimal(value: Decimal | None) -> float | None:
 def _split_list(value: str | None) -> list[str]:
     if not value:
         return []
-    return [part for part in value.split("||") if part]
+    parts = re.split(r"\|\||[,，、]", str(value))
+    return [part.strip() for part in parts if part and part.strip()]
+
+
+@lru_cache(maxsize=1)
+def _existing_table_names() -> set[str]:
+    try:
+        conn = _db_connection()
+    except Exception:
+        return set()
+    try:
+        cfg = _mysql_config()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT TABLE_NAME
+                FROM information_schema.tables
+                WHERE table_schema = %s
+                """,
+                (cfg["database"],),
+            )
+            return {row["TABLE_NAME"] for row in cur.fetchall()}
+    except Exception:
+        return set()
+    finally:
+        conn.close()
+
+
+def _table_exists(table_name: str) -> bool:
+    return str(table_name or "").strip() in _existing_table_names()
+
+
+@lru_cache(maxsize=None)
+def _table_column_names(table_name: str) -> set[str]:
+    table_name = str(table_name or "").strip()
+    if not table_name or not _table_exists(table_name):
+        return set()
+    try:
+        conn = _db_connection()
+    except Exception:
+        return set()
+    try:
+        cfg = _mysql_config()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = %s
+                """,
+                (cfg["database"], table_name),
+            )
+            return {row["COLUMN_NAME"] for row in cur.fetchall()}
+    except Exception:
+        return set()
+    finally:
+        conn.close()
+
+
+def _normalize_multi_value_text(value: str | None) -> str:
+    text = str(value or "")
+    text = text.replace("，", ",").replace("、", ",")
+    text = re.sub(r"\s+", "", text)
+    return text.strip(",")
+
+
+def _explode_multi_value_rows(rows: list[dict] | None) -> list[dict]:
+    counter: Counter[str] = Counter()
+    for row in rows or []:
+        raw_value = str(row.get("value") or "").strip()
+        if not raw_value:
+            continue
+        count = int(row.get("count") or 0)
+        for item in _split_list(raw_value):
+            counter[item] += count
+    return [{"value": value, "count": count} for value, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))]
 
 
 def _canonical_lookup_value(
@@ -116,24 +195,36 @@ def _build_item_filters(
         params.append(max_price)
 
     if scene and ignore != "scene":
-        where += " AND EXISTS (SELECT 1 FROM clothing_scene_info s WHERE s.ClothingId = ci.Id AND s.Scene = %s)"
-        params.append(
-            _canonical_lookup_value(
-                table_name="clothing_scene_info",
-                field_name="Scene",
-                value=scene,
-                semantic_name="场景",
-            )
+        scene_value = _canonical_lookup_value(
+            table_name="clothing_scene_info" if _table_exists("clothing_scene_info") else "clothing_info",
+            field_name="Scene" if _table_exists("clothing_scene_info") else "SuitableScene",
+            value=scene,
+            semantic_name="场景",
         )
+        if _table_exists("clothing_scene_info"):
+            where += " AND EXISTS (SELECT 1 FROM clothing_scene_info s WHERE s.ClothingId = ci.Id AND s.Scene = %s)"
+            params.append(scene_value)
+        else:
+            where += (
+                " AND CONCAT(',', REPLACE(REPLACE(REPLACE(COALESCE(ci.SuitableScene, ''), '，', ','), '、', ','), ' ', ''), ',') "
+                "LIKE CONCAT('%,', %s, ',%')"
+            )
+            params.append(_normalize_multi_value_text(scene_value))
 
     if fiber and ignore != "fiber":
-        where += " AND EXISTS (SELECT 1 FROM clothing_fiber_info f WHERE f.ClothingId = ci.Id AND f.Name = %s)"
+        where += (
+            " AND EXISTS ("
+            "SELECT 1 FROM clothing_fiber_info f "
+            "JOIN dict_fiber_info d ON d.Code = f.Code "
+            "WHERE f.ClothingId = ci.Id AND d.Name = %s"
+            ")"
+        )
         params.append(
             _canonical_lookup_value(
-                table_name="clothing_fiber_info",
+                table_name="dict_fiber_info",
                 field_name="Name",
                 value=fiber,
-                semantic_name="材质",
+                semantic_name="标准纤维名称",
             )
         )
 
@@ -152,7 +243,17 @@ def list_clothing_items(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
-    sql = """
+    scene_table_exists = _table_exists("clothing_scene_info")
+    if scene_table_exists:
+        scene_list_sql = """      (
+        SELECT GROUP_CONCAT(DISTINCT csi.Scene SEPARATOR '||')
+        FROM clothing_scene_info csi
+        WHERE csi.ClothingId = ci.Id
+      ) AS SceneList,
+"""
+    else:
+        scene_list_sql = "      ci.SuitableScene AS SceneList,\n"
+    sql = f"""
     SELECT
       ci.Id,
       ci.Name,
@@ -164,14 +265,10 @@ def list_clothing_items(
       ci.LeafCategory,
       ci.ColorName,
       ci.ImageURL,
-      (
-        SELECT GROUP_CONCAT(DISTINCT csi.Scene SEPARATOR '||')
-        FROM clothing_scene_info csi
-        WHERE csi.ClothingId = ci.Id
-      ) AS SceneList,
-      (
-        SELECT GROUP_CONCAT(DISTINCT cfi.Name SEPARATOR '||')
+{scene_list_sql}      (
+        SELECT GROUP_CONCAT(DISTINCT d.Name SEPARATOR '||')
         FROM clothing_fiber_info cfi
+        JOIN dict_fiber_info d ON d.Code = cfi.Code
         WHERE cfi.ClothingId = ci.Id
       ) AS FiberList
     FROM clothing_info ci
@@ -207,7 +304,10 @@ def list_clothing_items(
 
     for row in rows:
         row["Price"] = _normalize_decimal(row.get("Price"))
-        row["SceneList"] = _split_list(row.get("SceneList"))
+        if scene_table_exists:
+            row["SceneList"] = _split_list(row.get("SceneList"))
+        else:
+            row["SceneList"] = _split_list(row.get("SceneList"))
         row["FiberList"] = _split_list(row.get("FiberList"))
 
     return {
@@ -228,6 +328,7 @@ def get_clothing_facets(
     min_price: float | None = Query(default=None),
     max_price: float | None = Query(default=None),
 ) -> dict:
+    scene_table_exists = _table_exists("clothing_scene_info")
     conn = _db_connection()
     try:
         with conn.cursor() as cur:
@@ -310,19 +411,33 @@ def get_clothing_facets(
                 max_price=max_price,
                 ignore="scene",
             )
-            cur.execute(
-                f"""
-                SELECT s.Scene AS value, COUNT(DISTINCT ci.Id) AS count
-                FROM clothing_info ci
-                JOIN clothing_scene_info s ON s.ClothingId = ci.Id
-                {where_scene} AND s.Scene IS NOT NULL AND s.Scene <> ''
-                GROUP BY s.Scene
-                ORDER BY count DESC, value ASC
-                LIMIT 100
-                """,
-                params_scene,
-            )
-            scenes = cur.fetchall()
+            if scene_table_exists:
+                cur.execute(
+                    f"""
+                    SELECT s.Scene AS value, COUNT(DISTINCT ci.Id) AS count
+                    FROM clothing_info ci
+                    JOIN clothing_scene_info s ON s.ClothingId = ci.Id
+                    {where_scene} AND s.Scene IS NOT NULL AND s.Scene <> ''
+                    GROUP BY s.Scene
+                    ORDER BY count DESC, value ASC
+                    LIMIT 100
+                    """,
+                    params_scene,
+                )
+                scenes = cur.fetchall()
+            else:
+                cur.execute(
+                    f"""
+                    SELECT ci.SuitableScene AS value, COUNT(1) AS count
+                    FROM clothing_info ci
+                    {where_scene} AND ci.SuitableScene IS NOT NULL AND ci.SuitableScene <> ''
+                    GROUP BY ci.SuitableScene
+                    ORDER BY count DESC, value ASC
+                    LIMIT 100
+                    """,
+                    params_scene,
+                )
+                scenes = _explode_multi_value_rows(cur.fetchall())
 
             where_fiber, params_fiber = _build_item_filters(
                 brand=brand,
@@ -336,11 +451,12 @@ def get_clothing_facets(
             )
             cur.execute(
                 f"""
-                SELECT f.Name AS value, COUNT(DISTINCT ci.Id) AS count
+                SELECT d.Name AS value, COUNT(DISTINCT ci.Id) AS count
                 FROM clothing_info ci
                 JOIN clothing_fiber_info f ON f.ClothingId = ci.Id
-                {where_fiber} AND f.Name IS NOT NULL AND f.Name <> ''
-                GROUP BY f.Name
+                JOIN dict_fiber_info d ON d.Code = f.Code
+                {where_fiber} AND d.Name IS NOT NULL AND d.Name <> ''
+                GROUP BY d.Name
                 ORDER BY count DESC, value ASC
                 LIMIT 100
                 """,
@@ -361,6 +477,11 @@ def get_clothing_facets(
 
 @router.get("/items/{clothing_id}")
 def get_clothing_item(clothing_id: int) -> dict:
+    scene_table_exists = _table_exists("clothing_scene_info")
+    functions_table_exists = _table_exists("clothing_functions_info")
+    pattern_table_exists = _table_exists("clothing_pattern_info")
+    texture_table_exists = _table_exists("clothing_texture_info")
+    color_table_exists = _table_exists("clothing_images_color")
     conn = _db_connection()
     try:
         with conn.cursor() as cur:
@@ -388,6 +509,8 @@ def get_clothing_item(clothing_id: int) -> dict:
                   SourceUrl,
                   Functions,
                   Technologies,
+                  OtherFunctions,
+                  OtherFeatures,
                   Pattern,
                   CreateTime
                 FROM clothing_info
@@ -401,69 +524,101 @@ def get_clothing_item(clothing_id: int) -> dict:
 
             cur.execute(
                 """
-                SELECT Name, Percent
-                FROM clothing_fiber_info
-                WHERE ClothingId = %s
-                ORDER BY Percent DESC, Id ASC
+                SELECT
+                  f.Code,
+                  d.Name,
+                  f.Percent
+                FROM clothing_fiber_info f
+                LEFT JOIN dict_fiber_info d
+                  ON d.Code = f.Code
+                WHERE f.ClothingId = %s
+                ORDER BY f.Percent DESC, f.Id ASC
                 """,
                 (clothing_id,),
             )
             fibers = cur.fetchall()
 
-            cur.execute(
-                """
-                SELECT Functionality
-                FROM clothing_functions_info
-                WHERE ClothingId = %s
-                ORDER BY Id ASC
-                """,
-                (clothing_id,),
-            )
-            functions = [item["Functionality"] for item in cur.fetchall() if item.get("Functionality")]
+            if functions_table_exists:
+                cur.execute(
+                    """
+                    SELECT Functionality
+                    FROM clothing_functions_info
+                    WHERE ClothingId = %s
+                    ORDER BY Id ASC
+                    """,
+                    (clothing_id,),
+                )
+                functions = [item["Functionality"] for item in cur.fetchall() if item.get("Functionality")]
+            else:
+                functions = []
+                for key in ("Functions", "OtherFunctions", "Technologies"):
+                    functions.extend(_split_list(base.get(key)))
+                functions = list(dict.fromkeys(functions))
 
-            cur.execute(
-                """
-                SELECT Scene
-                FROM clothing_scene_info
-                WHERE ClothingId = %s
-                ORDER BY Id ASC
-                """,
-                (clothing_id,),
-            )
-            scenes = [item["Scene"] for item in cur.fetchall() if item.get("Scene")]
+            if scene_table_exists:
+                cur.execute(
+                    """
+                    SELECT Scene
+                    FROM clothing_scene_info
+                    WHERE ClothingId = %s
+                    ORDER BY Id ASC
+                    """,
+                    (clothing_id,),
+                )
+                scenes = [item["Scene"] for item in cur.fetchall() if item.get("Scene")]
+            else:
+                scenes = _split_list(base.get("SuitableScene"))
 
-            cur.execute(
-                """
-                SELECT pattern, IdentifyReason
-                FROM clothing_pattern_info
-                WHERE ClothingId = %s
-                ORDER BY Id ASC
-                """,
-                (clothing_id,),
-            )
-            patterns = cur.fetchall()
+            patterns = []
+            if pattern_table_exists:
+                pattern_columns = _table_column_names("clothing_pattern_info")
+                pattern_value_expr = "pattern" if "pattern" in pattern_columns else "Name" if "Name" in pattern_columns else ""
+                reason_expr = "IdentifyReason" if "IdentifyReason" in pattern_columns else "NULL"
+                confidence_expr = "Confidence" if "Confidence" in pattern_columns else "NULL"
+                if pattern_value_expr:
+                    cur.execute(
+                        f"""
+                        SELECT
+                          {pattern_value_expr} AS pattern,
+                          {reason_expr} AS IdentifyReason,
+                          {confidence_expr} AS Confidence
+                        FROM clothing_pattern_info
+                        WHERE ClothingId = %s
+                        ORDER BY Id ASC
+                        """,
+                        (clothing_id,),
+                    )
+                    patterns = cur.fetchall()
+            if not patterns and base.get("Pattern"):
+                patterns = [{"pattern": base.get("Pattern"), "IdentifyReason": None, "Confidence": None}]
 
-            cur.execute(
-                """
-                SELECT Texture, FabricType, PatternLayout, PatternTechnique, PatternComposition, PatternDefinition, PatternStyle
-                FROM clothing_texture_info
-                WHERE ClothingId = %s
-                ORDER BY Id ASC
-                """,
-                (clothing_id,),
-            )
-            textures = cur.fetchall()
+            if texture_table_exists:
+                cur.execute(
+                    """
+                    SELECT Texture, FabricType, PatternLayout, PatternTechnique, PatternComposition, PatternDefinition, PatternStyle
+                    FROM clothing_texture_info
+                    WHERE ClothingId = %s
+                    ORDER BY Id ASC
+                    """,
+                    (clothing_id,),
+                )
+                textures = cur.fetchall()
+            else:
+                textures = []
 
-            cur.execute(
-                """
-                SELECT RGB, LAB, ColoroId, PantoneId, Percent
-                FROM clothing_images_color
-                WHERE ClothingId = %s
-                ORDER BY Percent DESC, Id ASC
-                """,
-                (clothing_id,),
-            )
-            colors = cur.fetchall()
+            if color_table_exists:
+                cur.execute(
+                    """
+                    SELECT RGB, LAB, ColoroId, PantoneId, Percent
+                    FROM clothing_images_color
+                    WHERE ClothingId = %s
+                    ORDER BY Percent DESC, Id ASC
+                    """,
+                    (clothing_id,),
+                )
+                colors = cur.fetchall()
+            else:
+                colors = []
     finally:
         conn.close()
 

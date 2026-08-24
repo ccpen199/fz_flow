@@ -169,6 +169,9 @@ export type WebPreviewBodyProps = ComponentProps<"iframe"> & {
   loading?: ReactNode;
 };
 
+const WEB_PREVIEW_SANDBOX =
+  "allow-scripts allow-same-origin allow-forms allow-presentation";
+
 export const WebPreviewBody = ({
   className,
   loading,
@@ -178,10 +181,10 @@ export const WebPreviewBody = ({
   const { url } = useWebPreview();
 
   return (
-    <div className="flex-1">
+    <div className="min-h-0 flex-1 overflow-hidden">
       <iframe
         className={cn("size-full", className)}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+        sandbox={WEB_PREVIEW_SANDBOX}
         src={(src ?? url) || undefined}
         title="Preview"
         {...props}

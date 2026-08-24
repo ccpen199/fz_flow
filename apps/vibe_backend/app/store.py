@@ -194,10 +194,10 @@ def _load_state_from_mysql() -> dict | None:
 
 def load_state() -> None:
     payload = None
-    if FILE_STATE_ENABLED and STATE_FILE.exists():
-        payload = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    if not payload and MYSQL_STATE_ENABLED:
+    if MYSQL_STATE_ENABLED:
         payload = _load_state_from_mysql()
+    if not payload and FILE_STATE_ENABLED and STATE_FILE.exists():
+        payload = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     if not payload:
         return
     _load_payload(payload)

@@ -7,7 +7,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Callable
 
 import pymysql
 
@@ -77,8 +77,13 @@ EXCLUDED_FIELD_NAMES = {
 }
 
 
-def _mysql_config() -> dict:
-    return {
+def _mysql_config(
+    *,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
+    write_timeout: float | None = None,
+) -> dict:
+    config = {
         "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
         "port": int(os.getenv("MYSQL_PORT", "3306")),
         "user": os.getenv("MYSQL_USER", "root"),
@@ -88,6 +93,13 @@ def _mysql_config() -> dict:
         "cursorclass": pymysql.cursors.DictCursor,
         "autocommit": True,
     }
+    if connect_timeout is not None:
+        config["connect_timeout"] = connect_timeout
+    if read_timeout is not None:
+        config["read_timeout"] = read_timeout
+    if write_timeout is not None:
+        config["write_timeout"] = write_timeout
+    return config
 
 
 def _field_attr(field: Any, key: str, default: str = "") -> str:
@@ -149,6 +161,7 @@ class FieldValueCandidate:
     count: int
     normalized: str
     recent_count: int = 0
+    source_code: str = ""
 
 
 class FieldValueResolverService:
@@ -173,6 +186,13 @@ class FieldValueResolverService:
     def cache_ttl_seconds(self) -> int:
         return int(os.getenv("FIELD_VALUE_RESOLVER_CACHE_TTL_SECONDS", "300"))
 
+    @property
+    def query_timeout_seconds(self) -> float:
+        try:
+            return max(0.5, float(os.getenv("FIELD_VALUE_RESOLVER_QUERY_TIMEOUT_SECONDS", "8")))
+        except (TypeError, ValueError):
+            return 8.0
+
     def build_scene_value_context(
         self,
         *,
@@ -181,6 +201,10 @@ class FieldValueResolverService:
         intent: str = "",
     ) -> dict[str, Any]:
         fields = self._candidate_fields(scene=scene, queryable_fields=queryable_fields)
+        fields = self._fast_lookup_fields_for_intent(
+            fields=fields,
+            intent=intent,
+        )
         field_contexts: list[dict[str, Any]] = []
         remaining_total = int(os.getenv("FIELD_VALUE_RESOLVER_CONTEXT_TOTAL_LIMIT", "260"))
         for field in fields:
@@ -486,6 +510,7 @@ class FieldValueResolverService:
                 {
                     "value": item.value,
                     "score": round(score, 4),
+                    "confidence": round(score, 4),
                     "count": item.count,
                 }
                 for score, item in fuzzy_matches[:3]
@@ -498,34 +523,104 @@ class FieldValueResolverService:
         scene: Any,
         queryable_fields: list[Any] | None = None,
         intent: str = "",
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         intent_text = str(intent or "").strip()
         fields = self._candidate_fields(scene=scene, queryable_fields=queryable_fields)
-        field_entries: list[tuple[Any, list[FieldValueCandidate]]] = []
-        for field in fields:
-            values = self._load_field_values(
-                table_name=_field_attr(field, "table_name"),
-                field_name=_field_attr(field, "field_name"),
+        brand_fields = [
+            field
+            for field in fields
+            if self._is_standard_brand_field(field)
+        ]
+        brand_field = brand_fields[0] if brand_fields else None
+        brand_values = (
+            self._load_field_values(
+                table_name=_field_attr(brand_field, "table_name"),
+                field_name=_field_attr(brand_field, "field_name"),
             )
-            if values:
-                field_entries.append((field, values))
-        brand_values = next(
-            (
-                values
-                for field, values in field_entries
-                if _field_attr(field, "table_name").lower() == "dict_brand_info"
-                and _field_attr(field, "field_name").lower() == "name"
-            ),
-            [],
+            if brand_field is not None
+            else []
         )
         terms = self._extract_lookup_terms(intent_text, brand_values=brand_values)
         prefer_recent = self._intent_prefers_recent_values(intent_text)
 
-        groups: list[dict[str, Any]] = []
-        for term_index, term in enumerate(terms):
-            term_text = term["text"]
-            matches: list[dict[str, Any]] = []
-            for field, values in field_entries:
+        # Brand recognition is the common path for natural-language questions.
+        # Resolve it from the small dictionary first. Only load large business
+        # table value sets when the question still contains a non-structural
+        # term that could be a category/material/etc. value.
+        matches_by_term: list[list[dict[str, Any]]] = [[] for _ in terms]
+
+        def build_analysis() -> dict[str, Any]:
+            groups: list[dict[str, Any]] = []
+            for term_index, term in enumerate(terms):
+                term_text = term["text"]
+                matches = self._dedupe_intent_matches(matches_by_term[term_index])
+                if not matches:
+                    continue
+                distinct_fields = {
+                    (
+                        str(match.get("semantic_name") or "").strip().lower(),
+                        str(match.get("table_name") or "").strip().lower(),
+                        str(match.get("field_name") or "").strip().lower(),
+                    )
+                    for match in matches
+                }
+                distinct_values = {
+                    (
+                        str(match.get("semantic_name") or "").strip().lower(),
+                        str(match.get("table_name") or "").strip().lower(),
+                        str(match.get("field_name") or "").strip().lower(),
+                        str(match.get("canonical_value") or "").strip().lower(),
+                    )
+                    for match in matches
+                }
+                status = "ambiguous" if len(distinct_fields) > 1 or len(distinct_values) > 1 else "resolved"
+                ambiguity_reason = ""
+                if status == "ambiguous":
+                    ambiguity_reason = "multiple_fields" if len(distinct_fields) > 1 else "multiple_values"
+                groups.append(
+                    {
+                        "term_id": hashlib.md5(f"{term_index}|{term_text}".encode("utf-8")).hexdigest()[:12],
+                        "term_index": term_index,
+                        "text": term_text,
+                        "normalized": normalize_lookup_value(term_text),
+                        "source": term["source"],
+                        "status": status,
+                        "ambiguity_reason": ambiguity_reason,
+                        "matches": matches[:6],
+                        "recommended_match_index": 0,
+                    }
+                )
+
+            ambiguous = [item for item in groups if item.get("status") == "ambiguous"]
+            resolved = [item for item in groups if item.get("status") == "resolved"]
+            return {
+                "intent": intent_text,
+                "needs_confirmation": bool(ambiguous),
+                "term_count": len(terms),
+                "matched_term_count": len(groups),
+                "resolved_terms": resolved,
+                "ambiguous_terms": ambiguous,
+                "terms": groups,
+            }
+
+        def emit_progress(stage: str, message: str) -> None:
+            if not progress_callback:
+                return
+            payload = {
+                "stage": stage,
+                "message": message,
+                "analysis": build_analysis(),
+            }
+            try:
+                progress_callback(payload)
+            except Exception:  # noqa: BLE001
+                # Progress reporting must never break recognition itself.
+                return
+
+        def process_field(field: Any, values: list[FieldValueCandidate]) -> None:
+            for term_index, term in enumerate(terms):
+                term_text = term["text"]
                 resolved = self.resolve_field_value(
                     table_name=_field_attr(field, "table_name"),
                     field_name=_field_attr(field, "field_name"),
@@ -551,69 +646,54 @@ class FieldValueResolverService:
                     canonical_value = str(candidate.get("value") or "").strip() if isinstance(candidate, dict) else ""
                     if not canonical_value:
                         continue
-                    matches.append(
+                    confidence = float(
+                        candidate.get("score")
+                        if isinstance(candidate, dict) and candidate.get("score") is not None
+                        else resolved.get("score") or 0
+                    )
+                    matches_by_term[term_index].append(
                         {
                             "semantic_name": _field_attr(field, "semantic_name"),
                             "table_name": _field_attr(field, "table_name"),
                             "field_name": _field_attr(field, "field_name"),
                             "raw_value": term_text,
                             "canonical_value": canonical_value,
-                            "score": float(candidate.get("score") if isinstance(candidate, dict) and candidate.get("score") is not None else resolved.get("score") or 0),
+                            "score": confidence,
+                            "confidence": confidence,
                             "strategy": str(resolved.get("strategy") or ""),
                             "count": int(candidate.get("count") or 0) if isinstance(candidate, dict) else self._candidate_count(resolved),
                             "recent_count": int(candidate.get("recent_count") or 0) if isinstance(candidate, dict) else self._candidate_recent_count(resolved),
                         }
                     )
 
-            matches = self._dedupe_intent_matches(matches)
-            if not matches:
-                continue
-            distinct_fields = {
-                (
-                    str(match.get("semantic_name") or "").strip().lower(),
-                    str(match.get("table_name") or "").strip().lower(),
-                    str(match.get("field_name") or "").strip().lower(),
-                )
-                for match in matches
-            }
-            distinct_values = {
-                (
-                    str(match.get("semantic_name") or "").strip().lower(),
-                    str(match.get("table_name") or "").strip().lower(),
-                    str(match.get("field_name") or "").strip().lower(),
-                    str(match.get("canonical_value") or "").strip().lower(),
-                )
-                for match in matches
-            }
-            status = "ambiguous" if len(distinct_fields) > 1 or len(distinct_values) > 1 else "resolved"
-            ambiguity_reason = ""
-            if status == "ambiguous":
-                ambiguity_reason = "multiple_fields" if len(distinct_fields) > 1 else "multiple_values"
-            groups.append(
-                {
-                    "term_id": hashlib.md5(f"{term_index}|{term_text}".encode("utf-8")).hexdigest()[:12],
-                    "term_index": term_index,
-                    "text": term_text,
-                    "normalized": normalize_lookup_value(term_text),
-                    "source": term["source"],
-                    "status": status,
-                    "ambiguity_reason": ambiguity_reason,
-                    "matches": matches[:6],
-                    "recommended_match_index": 0,
-                }
-            )
+        if brand_field is not None and brand_values:
+            process_field(brand_field, brand_values)
+            emit_progress("brand", "品牌标准字典已查询，候选已追加")
 
-        ambiguous = [item for item in groups if item.get("status") == "ambiguous"]
-        resolved = [item for item in groups if item.get("status") == "resolved"]
-        return {
-            "intent": intent_text,
-            "needs_confirmation": bool(ambiguous),
-            "term_count": len(terms),
-            "matched_term_count": len(groups),
-            "resolved_terms": resolved,
-            "ambiguous_terms": ambiguous,
-            "terms": groups,
-        }
+        if self._intent_requires_non_brand_lookup(
+            terms=terms,
+            brand_values=brand_values,
+        ):
+            for field in fields:
+                if brand_field is not None and field is brand_field:
+                    continue
+                emit_progress(
+                    "field_querying",
+                    f"正在查询{_field_attr(field, 'semantic_name') or _field_attr(field, 'field_name')}…",
+                )
+                values = self._load_field_values(
+                    table_name=_field_attr(field, "table_name"),
+                    field_name=_field_attr(field, "field_name"),
+                )
+                if not values:
+                    continue
+                process_field(field, values)
+                emit_progress(
+                    "field",
+                    f"{_field_attr(field, 'semantic_name') or _field_attr(field, 'field_name')}已查询，结果已追加",
+                )
+
+        return build_analysis()
 
     def _candidate_count(self, resolved_payload: dict[str, Any]) -> int:
         candidates = resolved_payload.get("candidates")
@@ -646,14 +726,22 @@ class FieldValueResolverService:
             if existing is None:
                 deduped[key] = match
                 continue
-            current_score = (float(match.get("score") or 0), int(match.get("count") or 0))
-            existing_score = (float(existing.get("score") or 0), int(existing.get("count") or 0))
+            current_score = (
+                float(match.get("confidence") if match.get("confidence") is not None else match.get("score") or 0),
+                int(match.get("recent_count") or 0),
+                int(match.get("count") or 0),
+            )
+            existing_score = (
+                float(existing.get("confidence") if existing.get("confidence") is not None else existing.get("score") or 0),
+                int(existing.get("recent_count") or 0),
+                int(existing.get("count") or 0),
+            )
             if current_score > existing_score:
                 deduped[key] = match
         return sorted(
             deduped.values(),
             key=lambda item: (
-                float(item.get("score") or 0),
+                float(item.get("confidence") if item.get("confidence") is not None else item.get("score") or 0),
                 int(item.get("recent_count") or 0),
                 int(item.get("count") or 0),
             ),
@@ -1249,11 +1337,114 @@ class FieldValueResolverService:
             result.append(field)
         return result
 
+    def _is_standard_brand_field(self, field: Any) -> bool:
+        return (
+            _field_attr(field, "table_name").lower() == "dict_brand_info"
+            and _field_attr(field, "field_name").lower() == "name"
+        )
+
+    def _is_raw_brand_field(self, field: Any) -> bool:
+        return (
+            _field_attr(field, "table_name").lower() == "clothing_info"
+            and _field_attr(field, "field_name").lower() in {"brandname", "brandcode"}
+        )
+
+    def _is_structural_intent_term(self, value: Any) -> bool:
+        normalized = normalize_lookup_value(value)
+        if not normalized:
+            return True
+        text = _normalize_unicode(value)
+        if re.fullmatch(r"[a-z]{1,4}\d?", text, flags=re.IGNORECASE):
+            return True
+        structural_patterns = (
+            r"^(?:最近|近|过去|未来)?\d{1,4}天$",
+            r"^(?:最近|近|过去)\d{1,4}(?:天|周|月|季度)$",
+        )
+        if any(re.fullmatch(pattern, text) for pattern in structural_patterns):
+            return True
+        structural_keywords = (
+            "最近",
+            "过去",
+            "未来",
+            "按",
+            "查看",
+            "分析",
+            "统计",
+            "输出",
+            "价格带",
+            "分布",
+            "占比",
+            "数量",
+            "个数",
+            "sku数",
+            "品牌内",
+            "趋势",
+            "平均",
+            "最高",
+            "最低",
+            "价格",
+            "类目",
+            "品类",
+            "日期",
+            "抓取",
+        )
+        return any(keyword in text for keyword in structural_keywords)
+
+    def _intent_requires_non_brand_lookup(
+        self,
+        *,
+        terms: list[dict[str, str]],
+        brand_values: list[FieldValueCandidate],
+    ) -> bool:
+        if not terms:
+            return False
+        for term in terms:
+            term_text = str(term.get("text") or "").strip()
+            if not term_text or self._is_structural_intent_term(term_text):
+                continue
+            brand_result = self.resolve_field_value(
+                table_name="dict_brand_info",
+                field_name="Name",
+                raw_value=term_text,
+                semantic_name="品牌",
+                candidate_values=brand_values,
+            )
+            if brand_result.get("resolved"):
+                continue
+            return True
+        return False
+
+    def _fast_lookup_fields_for_intent(
+        self,
+        *,
+        fields: list[Any],
+        intent: str,
+    ) -> list[Any]:
+        brand_field = next(
+            (field for field in fields if self._is_standard_brand_field(field)),
+            None,
+        )
+        if brand_field is None or not str(intent or "").strip():
+            return fields
+        brand_values = self._load_field_values(
+            table_name=_field_attr(brand_field, "table_name"),
+            field_name=_field_attr(brand_field, "field_name"),
+        )
+        terms = self._extract_lookup_terms(str(intent or "").strip(), brand_values=brand_values)
+        if not self._intent_requires_non_brand_lookup(
+            terms=terms,
+            brand_values=brand_values,
+        ):
+            return [brand_field]
+        return fields
+
     def _is_lookup_candidate_field(self, field: Any) -> bool:
         table_name = _field_attr(field, "table_name").lower()
         field_name = _field_attr(field, "field_name")
         semantic_name = _field_attr(field, "semantic_name")
         role = _field_attr(field, "role").lower()
+        if self._is_raw_brand_field(field):
+            return False
         if role and role not in {"dimension", "filter"}:
             return False
         normalized_field_name = field_name.replace("_", "").lower()
@@ -1297,7 +1488,13 @@ class FieldValueResolverService:
             LIMIT %s
         """
         try:
-            conn = pymysql.connect(**_mysql_config())
+            conn = pymysql.connect(
+                **_mysql_config(
+                    connect_timeout=self.query_timeout_seconds,
+                    read_timeout=self.query_timeout_seconds,
+                    write_timeout=self.query_timeout_seconds,
+                )
+            )
             try:
                 with conn.cursor() as cur:
                     cur.execute(query, (self.max_distinct_values + 1,))
@@ -1324,38 +1521,29 @@ class FieldValueResolverService:
         return values
 
     def _load_standard_brand_values(self) -> list[FieldValueCandidate]:
+        # Do not join the large clothing fact table here. The dictionary is
+        # the source of truth for recognition; usage counts are optional
+        # ranking metadata and are hydrated only for matched brand codes.
         query = """
             SELECT
               CAST(db.`Name` AS CHAR) AS canonical_value,
               CAST(db.`NameEn` AS CHAR) AS name_en,
               CAST(db.`Alias` AS CHAR) AS alias_value,
-              CAST(db.`Code` AS CHAR) AS code_value,
-              COUNT(ci.`Id`) AS usage_count,
-              COALESCE(
-                SUM(
-                  CASE
-                    WHEN ci.`ReceiveTime` IS NOT NULL
-                     AND DATE(ci.`ReceiveTime`) >= DATE_SUB(
-                       (SELECT MAX(DATE(`ReceiveTime`)) FROM `clothing_info`),
-                       INTERVAL 30 DAY
-                     )
-                    THEN 1
-                    ELSE 0
-                  END
-                ),
-                0
-              ) AS recent_count
+              CAST(db.`Code` AS CHAR) AS code_value
             FROM `dict_brand_info` db
-            LEFT JOIN `clothing_info` ci
-              ON ci.`BrandCode` = db.`Code`
             WHERE db.`Name` IS NOT NULL
               AND TRIM(CAST(db.`Name` AS CHAR)) <> ''
-            GROUP BY db.`Code`, db.`Name`, db.`NameEn`, db.`Alias`
-            ORDER BY usage_count DESC, canonical_value ASC
+            ORDER BY db.`Id` ASC
             LIMIT %s
         """
         try:
-            conn = pymysql.connect(**_mysql_config())
+            conn = pymysql.connect(
+                **_mysql_config(
+                    connect_timeout=self.query_timeout_seconds,
+                    read_timeout=self.query_timeout_seconds,
+                    write_timeout=self.query_timeout_seconds,
+                )
+            )
             try:
                 with conn.cursor() as cur:
                     cur.execute(query, (self.max_distinct_values + 1,))
@@ -1381,8 +1569,6 @@ class FieldValueResolverService:
                 row.get("code_value"),
             ]
             qualifiers = self._bracket_qualifiers(canonical)
-            usage_count = int(row.get("usage_count") or 0)
-            recent_count = int(row.get("recent_count") or 0)
             for variant in variants:
                 for value in self._split_lookup_variants(variant):
                     normalized = normalize_lookup_value(value, drop_bracket_notes=False)
@@ -1395,9 +1581,9 @@ class FieldValueResolverService:
                     candidates.append(
                         FieldValueCandidate(
                             value=canonical,
-                            count=usage_count,
+                            count=0,
                             normalized=normalized,
-                            recent_count=recent_count,
+                            source_code=str(row.get("code_value") or "").strip(),
                         )
                     )
                     # Also index the canonical name without its bracketed
@@ -1411,9 +1597,9 @@ class FieldValueResolverService:
                         candidates.append(
                             FieldValueCandidate(
                                 value=canonical,
-                                count=usage_count,
+                                count=0,
                                 normalized=base_normalized,
-                                recent_count=recent_count,
+                                source_code=str(row.get("code_value") or "").strip(),
                             )
                         )
                     # A region-qualified English input such as
@@ -1439,9 +1625,9 @@ class FieldValueResolverService:
                                 candidates.append(
                                     FieldValueCandidate(
                                         value=canonical,
-                                        count=usage_count,
+                                        count=0,
                                         normalized=qualified_normalized,
-                                        recent_count=recent_count,
+                                        source_code=str(row.get("code_value") or "").strip(),
                                     )
                                 )
         return candidates
@@ -1571,6 +1757,7 @@ class FieldValueResolverService:
                     "value": item.value,
                     "count": item.count,
                     "score": round(score, 4) if item.value == canonical or ambiguous else None,
+                    "confidence": round(score, 4) if item.value == canonical or ambiguous else None,
                 }
                 for item in unique_candidates[:6]
             ],

@@ -143,3 +143,33 @@ def test_sql_table_aliases_keep_same_named_fields_in_their_own_table() -> None:
 
     assert service._sql_table_aliases(sql=sql, table_name="dict_brand_info") == {"db"}
     assert service._sql_table_aliases(sql=sql, table_name="dict_fiber_info") == set()
+
+
+def test_incremental_match_merge_keeps_highest_confidence_candidate() -> None:
+    service = FieldValueResolverService()
+    matches = service._dedupe_intent_matches(
+        [
+            {
+                "semantic_name": "品牌",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
+                "canonical_value": "优衣库（中国）",
+                "score": 0.91,
+                "confidence": 0.91,
+                "count": 100,
+            },
+            {
+                "semantic_name": "品牌",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
+                "canonical_value": "优衣库（中国）",
+                "score": 1.0,
+                "confidence": 1.0,
+                "count": 1,
+            },
+        ]
+    )
+
+    assert len(matches) == 1
+    assert matches[0]["canonical_value"] == "优衣库（中国）"
+    assert matches[0]["confidence"] == 1.0

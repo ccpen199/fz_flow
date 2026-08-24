@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from integrations.llm_agent import SqlResultAgentClient
@@ -28,12 +28,29 @@ class SqlResultAgentService:
         scene: SceneDTO,
         intent: str,
         context: dict[str, Any] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         available = self._queryable_semantic_fields(scene)
+
+        def relay_progress(payload: dict[str, Any]) -> None:
+            if not progress_callback:
+                return
+            progress_callback(
+                {
+                    "scene_id": scene.scene_id,
+                    "scene_name": scene.name,
+                    "scene_version": scene.version,
+                    "intent": str(intent or "").strip(),
+                    "context": context or {},
+                    **payload,
+                }
+            )
+
         analysis = field_value_resolver_service.analyze_intent_values(
             scene=scene,
             queryable_fields=available,
             intent=intent,
+            progress_callback=relay_progress,
         )
         return {
             "scene_id": scene.scene_id,

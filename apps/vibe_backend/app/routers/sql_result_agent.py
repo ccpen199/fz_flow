@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import StreamingResponse
 
 from ..services.scene_cache_service import scene_cache_service
 from ..services.runtime_persistence_service import runtime_persistence_service
@@ -41,12 +46,124 @@ async def analyze_sql_intent(scene_id: str, body: AnalyzeSqlIntentRequest) -> di
     intent = body.intent.strip()
     if not intent:
         raise HTTPException(status_code=400, detail="intent is required")
-    analysis = service.analyze_intent(
-        scene=scene,
-        intent=intent,
-        context=body.context if isinstance(body.context, dict) else None,
-    )
+    try:
+        timeout_seconds = max(
+            1.0,
+            float(os.getenv("FIELD_RESOLUTION_HTTP_TIMEOUT_SECONDS", "20")),
+        )
+    except (TypeError, ValueError):
+        timeout_seconds = 20.0
+    try:
+        analysis = await asyncio.wait_for(
+            run_in_threadpool(
+                service.analyze_intent,
+                scene=scene,
+                intent=intent,
+                context=body.context if isinstance(body.context, dict) else None,
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"字段自动识别超时（>{timeout_seconds:g}秒）。"
+                "已识别的标准字典未丢失，请检查客户库索引或减少本次输入中的业务筛选词。"
+            ),
+        ) from exc
     return {"ok": True, **analysis}
+
+
+@router.post("/scenes/{scene_id}/analyze-intent-stream")
+async def analyze_sql_intent_stream(scene_id: str, body: AnalyzeSqlIntentRequest) -> StreamingResponse:
+    scene = scene_cache_service.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="scene not found")
+    intent = body.intent.strip()
+    if not intent:
+        raise HTTPException(status_code=400, detail="intent is required")
+    try:
+        timeout_seconds = max(
+            1.0,
+            float(os.getenv("FIELD_RESOLUTION_HTTP_TIMEOUT_SECONDS", "20")),
+        )
+    except (TypeError, ValueError):
+        timeout_seconds = 20.0
+
+    async def event_stream():
+        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def publish(payload: dict[str, object]) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, payload)
+
+        async def run_analysis() -> None:
+            try:
+                result = await asyncio.wait_for(
+                    run_in_threadpool(
+                        service.analyze_intent,
+                        scene=scene,
+                        intent=intent,
+                        context=body.context if isinstance(body.context, dict) else None,
+                        progress_callback=publish,
+                    ),
+                    timeout=timeout_seconds,
+                )
+                await queue.put({"type": "complete", "ok": True, **result})
+            except asyncio.TimeoutError:
+                await queue.put(
+                    {
+                        "type": "error",
+                        "status": 504,
+                        "detail": (
+                            f"字段自动识别超时（>{timeout_seconds:g}秒）。"
+                            "已返回的候选仍可使用，请检查客户库索引或减少本次输入中的业务筛选词。"
+                        ),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                await queue.put(
+                    {
+                        "type": "error",
+                        "status": 500,
+                        "detail": str(exc).strip() or exc.__class__.__name__,
+                    }
+                )
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run_analysis())
+        try:
+            yield f"data: {json.dumps({'type': 'status', 'message': '正在查询品牌标准字典…'}, ensure_ascii=False)}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {"type": "status", "message": "仍在查询，已返回的字段不受影响…"},
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _latest_query_run_for_session(session_id: str) -> QueryRunDTO | None:

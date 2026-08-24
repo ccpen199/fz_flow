@@ -56,6 +56,7 @@ const state = {
   },
   fieldResolutionAutoTimerId: 0,
   fieldResolutionRequestId: 0,
+  fieldResolutionExecutionIntent: "",
   currentSession: null,
   currentDeck: null,
   currentArtifact: null,
@@ -703,6 +704,7 @@ function resetFieldResolutionState() {
     intent: "",
     selections: {},
   };
+  state.fieldResolutionExecutionIntent = "";
   renderFieldResolutionPanel();
 }
 
@@ -772,11 +774,74 @@ function buildDefaultFieldResolutionSelections(analysis) {
   return selections;
 }
 
+function fieldResolutionCandidateKey(match) {
+  if (!match || typeof match !== "object") return "";
+  return [
+    match.semantic_name,
+    match.table_name,
+    match.field_name,
+    match.canonical_value,
+  ]
+    .map((value) => normalizeIntent(value).toLowerCase())
+    .join("|");
+}
+
+function captureFieldResolutionSelectionKeys(analysis, selections) {
+  const result = {};
+  const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+  for (const term of terms) {
+    const termId = String(term?.term_id || "").trim();
+    if (!termId) continue;
+    const selection = normalizeFieldResolutionCandidateIndex(selections?.[termId]);
+    if (selection === "__ignore__") {
+      result[termId] = "__ignore__";
+      continue;
+    }
+    const matchIndex = Number.parseInt(selection, 10);
+    const matches = Array.isArray(term?.matches) ? term.matches : [];
+    if (!Number.isInteger(matchIndex) || !matches[matchIndex]) continue;
+    const key = fieldResolutionCandidateKey(matches[matchIndex]);
+    if (key) result[termId] = key;
+  }
+  return result;
+}
+
 function setFieldResolutionAnalysis(analysis, intent) {
   state.fieldResolution = {
     analysis: analysis || null,
     intent: String(intent || "").trim(),
     selections: buildDefaultFieldResolutionSelections(analysis),
+  };
+  renderFieldResolutionPanel();
+}
+
+function appendFieldResolutionAnalysis(analysis, intent) {
+  if (!analysis) return;
+  const previousAnalysis =
+    state.fieldResolution.analysis &&
+    normalizeIntent(state.fieldResolution.intent) === normalizeIntent(intent)
+      ? state.fieldResolution.analysis
+      : null;
+  const previousSelectionKeys = previousAnalysis
+    ? captureFieldResolutionSelectionKeys(previousAnalysis, state.fieldResolution.selections)
+    : {};
+  const nextSelections = buildDefaultFieldResolutionSelections(analysis);
+  for (const term of Array.isArray(analysis?.terms) ? analysis.terms : []) {
+    const termId = String(term?.term_id || "").trim();
+    const previousKey = previousSelectionKeys[termId];
+    if (!termId || !previousKey) continue;
+    if (previousKey === "__ignore__") {
+      nextSelections[termId] = "__ignore__";
+      continue;
+    }
+    const matches = Array.isArray(term?.matches) ? term.matches : [];
+    const nextIndex = matches.findIndex((match) => fieldResolutionCandidateKey(match) === previousKey);
+    if (nextIndex >= 0) nextSelections[termId] = String(nextIndex);
+  }
+  state.fieldResolution = {
+    analysis,
+    intent: String(intent || "").trim(),
+    selections: nextSelections,
   };
   renderFieldResolutionPanel();
 }
@@ -861,6 +926,7 @@ function buildFieldResolutionPayload() {
       field_name: match.field_name || "",
       canonical_value: match.canonical_value || "",
       score: match.score ?? 0,
+      confidence: match.confidence ?? match.score ?? 0,
       strategy: match.strategy || "",
       raw_value: termText,
     });
@@ -929,7 +995,7 @@ function renderFieldResolutionPanel() {
         choices.push({
           value,
           label: `${match.semantic_name || "-"} = ${match.canonical_value || "-"}`,
-          detail: `${match.table_name || "-"}.${match.field_name || "-"} · ${Number(match.score || 0).toFixed(2)}${Number(match.count || 0) ? ` · ${Number(match.count || 0)}条` : ""}`,
+          detail: `${match.table_name || "-"}.${match.field_name || "-"} · 置信度 ${Number(match.confidence ?? match.score ?? 0).toFixed(2)}${Number(match.count || 0) ? ` · ${Number(match.count || 0)}条` : ""}`,
         });
       });
       const activeChoice = choices.find((choice) => choice.value === currentValue) || choices[0];
@@ -972,12 +1038,13 @@ function renderFieldResolutionPanel() {
     .join("");
 }
 
-async function analyzeFieldResolutionForIntent(intent) {
+async function analyzeFieldResolutionForIntent(intent, requestId = state.fieldResolutionRequestId) {
   const sceneId = state.currentSceneId;
   if (!sceneId) return null;
   if (!String(intent || "").trim()) return null;
-  const analysis = await api(`/api/v1/sql-result-agent/scenes/${sceneId}/analyze-intent`, {
+  const result = await apiStream(`/api/v1/sql-result-agent/scenes/${sceneId}/analyze-intent-stream`, {
     method: "POST",
+    timeoutMs: 25000,
     body: JSON.stringify({
       intent,
       context: {
@@ -985,8 +1052,34 @@ async function analyzeFieldResolutionForIntent(intent) {
         scene_id: sceneId,
       },
     }),
+  }, async (event) => {
+    const isCurrentRequest =
+      requestId === state.fieldResolutionRequestId &&
+      normalizeIntent(currentFieldResolutionIntent()) === normalizeIntent(intent);
+    if (!isCurrentRequest) return;
+    if (event?.analysis) {
+      appendFieldResolutionAnalysis(event.analysis, intent);
+    }
+    const executionStarted =
+      state.fieldResolutionExecutionIntent === normalizeIntent(intent);
+    if (el("querySaveHint") && event?.message && !executionStarted) {
+      el("querySaveHint").textContent = event.message;
+    }
+    if (event?.type === "error") {
+      const error = new Error(String(event.detail || "字段自动识别失败"));
+      error.detail = event.detail || error.message;
+      error.status = event.status;
+      throw error;
+    }
   });
-  setFieldResolutionAnalysis(analysis, intent);
+  const analysis = result?.analysis || result;
+  if (
+    requestId !== state.fieldResolutionRequestId ||
+    normalizeIntent(currentFieldResolutionIntent()) !== normalizeIntent(intent)
+  ) {
+    return null;
+  }
+  appendFieldResolutionAnalysis(analysis, intent);
   syncFieldResolutionSelectionsFromDom();
   return analysis;
 }
@@ -1006,7 +1099,7 @@ async function autoAnalyzeFieldResolutionForIntent(intent, requestId) {
   }
   if (el("querySaveHint")) el("querySaveHint").textContent = "正在自动识别字段...";
   try {
-    const analysis = await analyzeFieldResolutionForIntent(normalizedIntent);
+    const analysis = await analyzeFieldResolutionForIntent(normalizedIntent, requestId);
     if (
       requestId !== state.fieldResolutionRequestId ||
       normalizeIntent(currentFieldResolutionIntent()) !== normalizedIntent
@@ -1014,7 +1107,7 @@ async function autoAnalyzeFieldResolutionForIntent(intent, requestId) {
       return null;
     }
     const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
-    if (el("querySaveHint")) {
+    if (el("querySaveHint") && state.fieldResolutionExecutionIntent !== normalizedIntent) {
       el("querySaveHint").textContent = terms.length
         ? "字段已自动识别并默认选中，请确认后生成SQL。"
         : "字段已自动识别，未发现需要转换的标准值，可确认后生成SQL。";
@@ -1316,19 +1409,37 @@ function formatErrorDetail(detail) {
 
 async function api(path, options = {}) {
   syncBackendBase();
+  const timeoutMs = Number(options.timeoutMs || 0);
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
   const requestOptions = {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
+    ...fetchOptions,
   };
   const primaryBase = state.backendBase;
   const primaryUrl = buildApiUrl(primaryBase, path);
   let response;
+  let timeoutId = 0;
+  let controller = null;
+  if (timeoutMs > 0 && typeof AbortController !== "undefined" && !requestOptions.signal) {
+    controller = new AbortController();
+    requestOptions.signal = controller.signal;
+    timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  }
   try {
     response = await fetch(primaryUrl, requestOptions);
   } catch (error) {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)}秒）：${path}`);
+      timeoutError.detail = "字段自动识别超时，请检查后端日志、数据库索引或稍后重试。";
+      timeoutError.path = path;
+      timeoutError.url = primaryUrl;
+      throw timeoutError;
+    }
     const detail = error?.message || String(error);
     throw new Error(`请求接口失败：${primaryUrl}。请检查后端服务是否可达、接口是否超时或网络是否异常。${detail}`);
   }
+  if (timeoutId) window.clearTimeout(timeoutId);
   if (!response.ok) {
     const text = await response.text();
     let detail = text;
@@ -1349,6 +1460,89 @@ async function api(path, options = {}) {
   const type = response.headers.get("content-type") || "";
   if (type.includes("application/json")) return response.json();
   return response.text();
+}
+
+async function apiStream(path, options = {}, onEvent = async () => {}) {
+  syncBackendBase();
+  const timeoutMs = Number(options.timeoutMs || 0);
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+  const requestOptions = {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...fetchOptions,
+  };
+  const primaryUrl = buildApiUrl(state.backendBase, path);
+  let timeoutId = 0;
+  let controller = null;
+  if (timeoutMs > 0 && typeof AbortController !== "undefined" && !requestOptions.signal) {
+    controller = new AbortController();
+    requestOptions.signal = controller.signal;
+    timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  }
+
+  let response;
+  try {
+    response = await fetch(primaryUrl, requestOptions);
+  } catch (error) {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)}秒）：${path}`);
+      timeoutError.detail = "字段自动识别超时，已显示的候选仍保留，可先确认已有字段。";
+      throw timeoutError;
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    const text = await response.text();
+    let detail = text;
+    try {
+      const payload = JSON.parse(text);
+      detail = formatErrorDetail(payload?.detail || text);
+    } catch (_error) {
+      detail = text;
+    }
+    const error = new Error(`${response.status} ${detail}`);
+    error.status = response.status;
+    error.detail = detail;
+    throw error;
+  }
+  if (!response.body || typeof response.body.getReader !== "function") {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    throw new Error("浏览器不支持流式字段识别");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let completed = null;
+  const consumeLines = async (flush = false) => {
+    if (flush) buffer += decoder.decode();
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const raw = line.slice(5).trim();
+      if (!raw) continue;
+      const event = JSON.parse(raw);
+      await onEvent(event);
+      if (event?.type === "complete") completed = event;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      await consumeLines();
+    }
+    await consumeLines(true);
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    reader.releaseLock();
+  }
+  if (!completed) throw new Error("字段识别未返回完整结果");
+  return completed;
 }
 
 function isSessionNotFoundError(error) {
@@ -3799,6 +3993,7 @@ async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {})
       return;
     }
   }
+  state.fieldResolutionExecutionIntent = normalizeIntent(intent);
   const session = await createSessionForCurrentScene({ intent });
   if (!session) throw new Error("请先选择场景");
   const recommendation = state.currentLlmAgentDraft?.candidates || {};

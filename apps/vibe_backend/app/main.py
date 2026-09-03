@@ -8,6 +8,7 @@ from .routers.bridge import router as bridge_router
 from .routers.clothing import router as clothing_router
 from .routers.config_transfer import router as config_transfer_router
 from .routers.decks import router as decks_router
+from .routers.input_correction_lexicon import router as input_correction_lexicon_router
 from .routers.llm_agent import router as llm_agent_router
 from .routers.memory import router as memory_router
 from .routers.preferences import router as preferences_router
@@ -17,6 +18,7 @@ from .routers.scenes import router as scenes_router, warm_scene_cache
 from .routers.slides import router as slides_router
 from .routers.sql_result_agent import router as sql_result_agent_router
 from .services.dictionary_view_bootstrap import dictionary_view_bootstrap
+from .services.input_correction_lexicon_service import input_correction_lexicon_service
 from .store import load_state
 
 app = FastAPI(title="Vibe Data Analysis Backend", version="0.1.0")
@@ -42,6 +44,7 @@ app.include_router(memory_router)
 app.include_router(bridge_router)
 app.include_router(clothing_router)
 app.include_router(config_transfer_router)
+app.include_router(input_correction_lexicon_router)
 app.include_router(admin_router)
 app.include_router(sql_result_agent_router)
 
@@ -49,6 +52,7 @@ app.include_router(sql_result_agent_router)
 @app.on_event("startup")
 async def startup_load_state() -> None:
     dictionary_view_bootstrap.ensure()
+    input_correction_lexicon_service.ensure()
     load_state()
     warm_scene_cache()
 

@@ -37,6 +37,13 @@ const state = {
   },
   currentSceneDetail: null,
   currentScenePlaybook: null,
+  currentSceneSchemaSnapshot: null,
+  currentSceneSchemaIndex: {
+    tables: [],
+    tableMap: new Map(),
+    fieldsByTable: new Map(),
+  },
+  currentSceneSchemaLoadError: "",
   selectedPresetKey: "",
   selectedPresetQuestion: "",
   semanticCacheFields: [],
@@ -57,6 +64,7 @@ const state = {
   fieldResolutionAutoTimerId: 0,
   fieldResolutionRequestId: 0,
   fieldResolutionExecutionIntent: "",
+  inputCorrectionLexicon: [],
   currentSession: null,
   currentDeck: null,
   currentArtifact: null,
@@ -79,6 +87,111 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 const pretty = (value) => JSON.stringify(value ?? {}, null, 2);
+
+function normalizeSchemaKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildSceneSchemaIndex(snapshot) {
+  const tables = Array.isArray(snapshot?.tables) ? snapshot.tables : [];
+  const tableMap = new Map();
+  const fieldsByTable = new Map();
+  const normalizedTables = [];
+
+  tables.forEach((table) => {
+    if (!table || typeof table !== "object") return;
+    const tableName = String(table.table_name || "").trim();
+    if (!tableName) return;
+    const tableKey = normalizeSchemaKey(tableName);
+    const fieldNames = [];
+    const fieldMap = new Map();
+    const fields = Array.isArray(table.fields) ? table.fields : [];
+    fields.forEach((field) => {
+      if (!field || typeof field !== "object") return;
+      const fieldName = String(field.field_name || "").trim();
+      if (!fieldName) return;
+      const fieldKey = normalizeSchemaKey(fieldName);
+      if (!fieldKey || fieldMap.has(fieldKey)) return;
+      fieldMap.set(fieldKey, fieldName);
+      fieldNames.push(fieldName);
+    });
+    normalizedTables.push({
+      table_name: tableName,
+      table_comment: String(table.table_comment || "").trim(),
+      fields: fieldNames,
+    });
+    tableMap.set(tableKey, {
+      table_name: tableName,
+      table_comment: String(table.table_comment || "").trim(),
+      fields: fieldNames,
+      fieldMap,
+    });
+    fieldsByTable.set(tableKey, fieldMap);
+  });
+
+  return {
+    tables: normalizedTables,
+    tableMap,
+    fieldsByTable,
+  };
+}
+
+function renderDatalistOptions(id, values) {
+  const target = el(id);
+  if (!target) return;
+  const uniqueValues = [];
+  const seen = new Set();
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    uniqueValues.push(text);
+  });
+  target.innerHTML = uniqueValues.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
+}
+
+function resolveSceneSchemaTable(tableName) {
+  const index = state.currentSceneSchemaIndex;
+  if (!index || typeof index !== "object") return null;
+  const tableKey = normalizeSchemaKey(tableName);
+  if (!tableKey) return null;
+  return index.tableMap?.get(tableKey) || null;
+}
+
+function resolveSceneSchemaField(tableName, fieldName) {
+  const table = resolveSceneSchemaTable(tableName);
+  if (!table) return null;
+  const fieldKey = normalizeSchemaKey(fieldName);
+  if (!fieldKey) return null;
+  return table.fieldMap?.get(fieldKey) || null;
+}
+
+function syncSceneSchemaInputLists() {
+  const index = state.currentSceneSchemaIndex;
+  const tableNames = Array.isArray(index?.tables) ? index.tables.map((item) => item.table_name) : [];
+  renderDatalistOptions("sceneTableOptions", tableNames);
+
+  const tableInputs = ["fieldTableName", "relationLeftTable", "relationRightTable"];
+  tableInputs.forEach((id) => {
+    const input = el(id);
+    if (input) input.setAttribute("list", "sceneTableOptions");
+  });
+
+  const fieldTargets = [
+    ["fieldName", "fieldTableName", "fieldNameOptions"],
+    ["relationLeftField", "relationLeftTable", "relationLeftFieldOptions"],
+    ["relationRightField", "relationRightTable", "relationRightFieldOptions"],
+  ];
+  fieldTargets.forEach(([fieldInputId, tableInputId, datalistId]) => {
+    const fieldInput = el(fieldInputId);
+    if (fieldInput) fieldInput.setAttribute("list", datalistId);
+    const tableValue = el(tableInputId)?.value || "";
+    const fields = resolveSceneSchemaTable(tableValue)?.fields || [];
+    renderDatalistOptions(datalistId, fields);
+  });
+}
 
 function readStoredUiState() {
   try {
@@ -708,6 +821,241 @@ function resetFieldResolutionState() {
   renderFieldResolutionPanel();
 }
 
+function getIntentCorrections() {
+  const corrections = state.fieldResolution.analysis?.corrections;
+  return Array.isArray(corrections)
+    ? corrections.filter(
+        (item) =>
+          item &&
+          String(item.term || "").trim() &&
+          String(item.suggested_word || "").trim(),
+      )
+    : [];
+}
+
+function normalizeCorrectionComparableText(value) {
+  return String(value || "").normalize("NFKC").toLocaleLowerCase();
+}
+
+function findCorrectionRanges(intent, corrections) {
+  const text = String(intent || "");
+  const normalizedText = normalizeCorrectionComparableText(text);
+  const ranges = [];
+  for (const correction of corrections) {
+    const rawTerm = String(correction?.term || "").trim();
+    if (!rawTerm) continue;
+    const normalizedTerm = normalizeCorrectionComparableText(rawTerm);
+    if (!normalizedTerm) continue;
+    let start = 0;
+    while (start < normalizedText.length) {
+      const index = normalizedText.indexOf(normalizedTerm, start);
+      if (index < 0) break;
+      ranges.push({ start: index, end: index + normalizedTerm.length });
+      start = index + normalizedTerm.length;
+    }
+  }
+  ranges.sort((left, right) => left.start - right.start || right.end - right.start - (left.end - left.start));
+  const accepted = [];
+  for (const range of ranges) {
+    const last = accepted[accepted.length - 1];
+    if (last && range.start < last.end) continue;
+    accepted.push(range);
+  }
+  return accepted;
+}
+
+function renderQueryIntentHighlight() {
+  const input = el("queryIntentInput");
+  const overlay = el("queryIntentHighlight");
+  const wrap = el("queryIntentInputWrap");
+  if (!input || !overlay || !wrap) return;
+  const intent = String(input.value || "");
+  const corrections = getIntentCorrections();
+  const ranges = findCorrectionRanges(intent, corrections);
+  if (!ranges.length) {
+    overlay.textContent = "";
+    wrap.classList.remove("has-correction-highlights");
+    return;
+  }
+  let cursor = 0;
+  const markup = [];
+  for (const range of ranges) {
+    markup.push(escapeHtml(intent.slice(cursor, range.start)));
+    markup.push(`<mark>${escapeHtml(intent.slice(range.start, range.end))}</mark>`);
+    cursor = range.end;
+  }
+  markup.push(escapeHtml(intent.slice(cursor)));
+  overlay.innerHTML = markup.join("");
+  overlay.scrollTop = input.scrollTop;
+  overlay.scrollLeft = input.scrollLeft;
+  wrap.classList.add("has-correction-highlights");
+}
+
+function renderIntentCorrectionPanel() {
+  const panel = el("intentCorrectionPanel");
+  const summary = el("intentCorrectionSummary");
+  const list = el("intentCorrectionList");
+  if (!panel || !summary || !list) return;
+  const corrections = getIntentCorrections();
+  renderQueryIntentHighlight();
+  if (!corrections.length) {
+    panel.hidden = true;
+    summary.textContent = "";
+    list.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  summary.textContent = `发现 ${corrections.length} 处建议，勾选后才会改写问题。`;
+  list.innerHTML = corrections
+    .map((item, index) => {
+      const original = String(item.term || "").trim();
+      const suggested = String(item.suggested_word || "").trim();
+      const confidence = Number(item.confidence || item.score || 0);
+      const detail = [
+        `原词：${original}`,
+        `建议：${suggested}`,
+        `原因：${String(item.reason || "匹配人工纠错词库")}`,
+        `置信度：${confidence.toFixed(2)}`,
+      ].join("\n");
+      return `
+        <button
+          type="button"
+          class="intent-correction-apply"
+          data-apply-intent-correction="${index}"
+          data-tooltip="${escapeHtml(detail)}"
+          title="${escapeHtml(detail)}"
+          aria-label="使用纠正：${escapeHtml(original)} 改为 ${escapeHtml(suggested)}"
+        >
+          <span class="intent-correction-check" aria-hidden="true">☐</span>
+          <span class="intent-correction-original">${escapeHtml(original)}</span>
+          <span class="intent-correction-arrow" aria-hidden="true">→</span>
+          <span class="intent-correction-target">${escapeHtml(suggested)}</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function applyIntentCorrection(correctionIndex) {
+  const corrections = getIntentCorrections();
+  const correction = corrections[Number(correctionIndex)];
+  const input = el("queryIntentInput");
+  if (!correction || !input) return;
+  const rawTerm = String(correction.term || "").trim();
+  const suggestedWord = String(correction.suggested_word || "").trim();
+  const currentIntent = String(input.value || "");
+  if (!rawTerm || !suggestedWord) {
+    return;
+  }
+  const ranges = findCorrectionRanges(currentIntent, [correction]);
+  if (!ranges.length) {
+    if (el("querySaveHint")) el("querySaveHint").textContent = "原词已发生变化，请等待系统重新识别后再应用纠正。";
+    return;
+  }
+  let correctedIntent = currentIntent;
+  for (let index = ranges.length - 1; index >= 0; index -= 1) {
+    const range = ranges[index];
+    correctedIntent = `${correctedIntent.slice(0, range.start)}${suggestedWord}${correctedIntent.slice(range.end)}`;
+  }
+  input.value = correctedIntent;
+  input.focus();
+  renderPriceBandModeControl();
+  persistUiState();
+  scheduleAutoFieldResolutionAnalysis(input.value, { immediate: true });
+}
+
+function renderInputCorrectionLexicon() {
+  const list = el("inputCorrectionLexiconList");
+  const hint = el("inputCorrectionLexiconHint");
+  if (!list || !hint) return;
+  const items = Array.isArray(state.inputCorrectionLexicon) ? state.inputCorrectionLexicon : [];
+  hint.textContent = items.length
+    ? `已维护 ${items.length} 个正确写法。重复追加会自动合并并重新启用。`
+    : "追加正确写法后，系统会在执行前把它作为纠错目标进行匹配。";
+  list.innerHTML = items.length
+    ? items
+        .map((item) => {
+          const id = String(item?.correction_id || "").trim();
+          const word = String(item?.correct_word || "").trim();
+          const enabled = item?.enabled !== false;
+          if (!id || !word) return "";
+          return `
+            <div class="input-correction-lexicon-row${enabled ? "" : " is-disabled"}">
+              <span class="input-correction-lexicon-word" title="${escapeHtml(word)}">${escapeHtml(word)}</span>
+              <button
+                type="button"
+                class="secondary compact-btn"
+                data-input-correction-toggle="${escapeHtml(id)}"
+                data-input-correction-enabled="${enabled ? "false" : "true"}"
+              >${enabled ? "停用" : "启用"}</button>
+              <button type="button" class="danger compact-btn" data-input-correction-delete="${escapeHtml(id)}">删除</button>
+            </div>
+          `;
+        })
+        .join("")
+    : `<p class="muted">暂无人工追加的正确写法。</p>`;
+}
+
+async function loadInputCorrectionLexicon() {
+  const payload = await api("/api/v1/input-corrections?include_disabled=true");
+  state.inputCorrectionLexicon = Array.isArray(payload?.items) ? payload.items : [];
+  renderInputCorrectionLexicon();
+  return state.inputCorrectionLexicon;
+}
+
+async function openInputCorrectionLexicon() {
+  await loadInputCorrectionLexicon();
+  const dialog = el("inputCorrectionLexiconDialog");
+  if (dialog instanceof HTMLDialogElement && !dialog.open) dialog.showModal();
+  el("inputCorrectionWord")?.focus();
+}
+
+async function addInputCorrectionWord() {
+  const input = el("inputCorrectionWord");
+  const word = String(input?.value || "").trim();
+  if (!word) throw new Error("请输入纠错后的正确写法");
+  const payload = await api("/api/v1/input-corrections", {
+    method: "POST",
+    body: JSON.stringify({ correct_word: word }),
+  });
+  const item = payload?.item;
+  if (item && typeof item === "object") {
+    const next = state.inputCorrectionLexicon.filter(
+      (row) => String(row?.correction_id || "") !== String(item.correction_id || ""),
+    );
+    next.unshift(item);
+    state.inputCorrectionLexicon = next;
+  } else {
+    await loadInputCorrectionLexicon();
+  }
+  if (input) input.value = "";
+  renderInputCorrectionLexicon();
+  if (el("inputCorrectionLexiconHint")) {
+    el("inputCorrectionLexiconHint").textContent = `已追加正确写法：${String(item?.correct_word || word)}`;
+  }
+  scheduleAutoFieldResolutionAnalysis(currentFieldResolutionIntent(), { immediate: true });
+}
+
+async function updateInputCorrectionEnabled(correctionId, enabled) {
+  await api(`/api/v1/input-corrections/${encodeURIComponent(correctionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled: Boolean(enabled) }),
+  });
+  await loadInputCorrectionLexicon();
+  scheduleAutoFieldResolutionAnalysis(currentFieldResolutionIntent(), { immediate: true });
+}
+
+async function deleteInputCorrectionWord(correctionId) {
+  await api(`/api/v1/input-corrections/${encodeURIComponent(correctionId)}`, {
+    method: "DELETE",
+  });
+  state.inputCorrectionLexicon = state.inputCorrectionLexicon.filter(
+    (item) => String(item?.correction_id || "") !== String(correctionId || ""),
+  );
+  renderInputCorrectionLexicon();
+  scheduleAutoFieldResolutionAnalysis(currentFieldResolutionIntent(), { immediate: true });
+}
+
 function normalizeFieldResolutionCandidateIndex(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -948,6 +1296,7 @@ function renderFieldResolutionPanel() {
   if (!panel || !summary || !list) return;
   const analysis = state.fieldResolution.analysis;
   const terms = Array.isArray(analysis?.terms) ? analysis.terms : [];
+  renderIntentCorrectionPanel();
   if (!analysis || !terms.length) {
     panel.hidden = true;
     summary.textContent = "";
@@ -1594,6 +1943,13 @@ function clearCurrentSessionState() {
 function clearCurrentSceneDetailState() {
   state.currentSceneDetail = null;
   state.currentScenePlaybook = null;
+  state.currentSceneSchemaSnapshot = null;
+  state.currentSceneSchemaIndex = {
+    tables: [],
+    tableMap: new Map(),
+    fieldsByTable: new Map(),
+  };
+  state.currentSceneSchemaLoadError = "";
   state.selectedPresetKey = "";
   state.selectedPresetQuestion = "";
   state.semanticCacheFields = [];
@@ -2688,6 +3044,7 @@ function renderSceneConfig() {
     if (semanticCacheKeyword) semanticCacheKeyword.value = state.semanticCacheKeyword;
     if (semanticCacheFormHint) semanticCacheFormHint.textContent = "请选择场景后新增字段。";
     syncSceneAdvancedFieldState();
+    syncSceneSchemaInputLists();
     renderLlmCandidateSelector();
     renderLlmCacheStatus();
     return;
@@ -2768,6 +3125,7 @@ function renderSceneConfig() {
         ? `${modeText} 检测到重复物理字段（table_name + field_name）${dedupedSemantic.duplicateCount} 条，列表仅展示最新一条。`
         : modeText;
   }
+  syncSceneSchemaInputLists();
 }
 
 function requireCurrentRecommendation() {
@@ -3551,8 +3909,43 @@ async function refreshSceneDetail() {
   }
   state.currentLlmAgentDraft = draft;
   if (state.currentLlmAgentDraft) syncDraftSelectionState(state.currentLlmAgentDraft);
+  await refreshCurrentSceneSchemaSnapshot();
   renderSceneConfig();
   renderPriceBandModeControl();
+}
+
+async function refreshCurrentSceneSchemaSnapshot() {
+  const sceneId = String(state.currentSceneId || "").trim();
+  if (!sceneId) {
+    state.currentSceneSchemaSnapshot = null;
+    state.currentSceneSchemaIndex = {
+      tables: [],
+      tableMap: new Map(),
+      fieldsByTable: new Map(),
+    };
+    state.currentSceneSchemaLoadError = "";
+    syncSceneSchemaInputLists();
+    return null;
+  }
+  try {
+    const snapshot = await api(`/api/v1/scene-builder/scenes/${encodeURIComponent(sceneId)}/source-schema?force_refresh=true`);
+    if (sceneId !== String(state.currentSceneId || "").trim()) return null;
+    state.currentSceneSchemaSnapshot = snapshot && typeof snapshot === "object" ? snapshot : null;
+    state.currentSceneSchemaIndex = buildSceneSchemaIndex(state.currentSceneSchemaSnapshot);
+    state.currentSceneSchemaLoadError = "";
+  } catch (error) {
+    if (sceneId !== String(state.currentSceneId || "").trim()) return null;
+    console.warn("load scene schema snapshot failed", error);
+    state.currentSceneSchemaSnapshot = null;
+    state.currentSceneSchemaIndex = {
+      tables: [],
+      tableMap: new Map(),
+      fieldsByTable: new Map(),
+    };
+    state.currentSceneSchemaLoadError = error?.detail || error?.message || String(error);
+  }
+  syncSceneSchemaInputLists();
+  return state.currentSceneSchemaSnapshot;
 }
 
 function formatConfigTransferCounts(counts = {}) {
@@ -3765,6 +4158,19 @@ async function addSceneField() {
   if (!payload.table_name || !payload.field_name || !payload.semantic_name) {
     throw new Error("新增字段失败：请至少填写 table_name / field_name / semantic_name");
   }
+  const canValidateLocally = Array.isArray(state.currentSceneSchemaIndex?.tables) && state.currentSceneSchemaIndex.tables.length > 0;
+  if (canValidateLocally) {
+    const table = resolveSceneSchemaTable(payload.table_name);
+    if (!table) {
+      throw new Error(`数据库中不存在表：${payload.table_name}`);
+    }
+    const fieldName = resolveSceneSchemaField(payload.table_name, payload.field_name);
+    if (!fieldName) {
+      throw new Error(`数据库中不存在字段：${table.table_name}.${payload.field_name}`);
+    }
+    payload.table_name = table.table_name;
+    payload.field_name = fieldName;
+  }
   if (state.editingSemanticCacheId) {
     await api(`/api/v1/semantic-cache/scenes/${state.currentSceneId}/fields/${state.editingSemanticCacheId}`, {
       method: "PATCH",
@@ -3849,6 +4255,29 @@ async function addSceneRelation() {
   };
   if (!payload.left_table || !payload.left_field || !payload.right_table || !payload.right_field) {
     throw new Error("新增关系失败：请至少填写四个连接字段");
+  }
+  const canValidateLocally = Array.isArray(state.currentSceneSchemaIndex?.tables) && state.currentSceneSchemaIndex.tables.length > 0;
+  if (canValidateLocally) {
+    const leftTable = resolveSceneSchemaTable(payload.left_table);
+    if (!leftTable) {
+      throw new Error(`数据库中不存在表：${payload.left_table}`);
+    }
+    const leftField = resolveSceneSchemaField(payload.left_table, payload.left_field);
+    if (!leftField) {
+      throw new Error(`数据库中不存在字段：${leftTable.table_name}.${payload.left_field}`);
+    }
+    const rightTable = resolveSceneSchemaTable(payload.right_table);
+    if (!rightTable) {
+      throw new Error(`数据库中不存在表：${payload.right_table}`);
+    }
+    const rightField = resolveSceneSchemaField(payload.right_table, payload.right_field);
+    if (!rightField) {
+      throw new Error(`数据库中不存在字段：${rightTable.table_name}.${payload.right_field}`);
+    }
+    payload.left_table = leftTable.table_name;
+    payload.left_field = leftField;
+    payload.right_table = rightTable.table_name;
+    payload.right_field = rightField;
   }
   await api(`/api/v1/scenes/${state.currentSceneId}/relations`, {
     method: "POST",
@@ -4413,6 +4842,15 @@ function bind() {
   if (el("clearFieldResolutionBtn")) {
     el("clearFieldResolutionBtn").onclick = () => resetFieldResolutionState();
   }
+  if (el("intentCorrectionList")) {
+    el("intentCorrectionList").addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest("[data-apply-intent-correction]");
+      if (!(button instanceof HTMLElement)) return;
+      applyIntentCorrection(button.dataset.applyIntentCorrection);
+    });
+  }
   if (el("fieldResolutionList")) {
     el("fieldResolutionList").addEventListener("change", (event) => {
       const target = event.target;
@@ -4501,6 +4939,14 @@ function bind() {
       renderPriceBandModeControl();
       persistUiState();
     });
+    el("queryIntentInput").addEventListener("scroll", () => {
+      const overlay = el("queryIntentHighlight");
+      const input = el("queryIntentInput");
+      if (overlay && input) {
+        overlay.scrollTop = input.scrollTop;
+        overlay.scrollLeft = input.scrollLeft;
+      }
+    });
   }
   document.querySelectorAll("#priceBandModeToggle .price-band-mode-btn").forEach((button) => {
     button.addEventListener("click", () => {
@@ -4554,6 +5000,43 @@ function bind() {
   }
   if (el("guideBtn")) el("guideBtn").onclick = () => el("guideDialog").showModal();
   if (el("closeGuideBtn")) el("closeGuideBtn").onclick = () => el("guideDialog").close();
+  if (el("openInputCorrectionLexiconBtn")) {
+    el("openInputCorrectionLexiconBtn").onclick = () => run(openInputCorrectionLexicon);
+  }
+  if (el("closeInputCorrectionLexiconBtn")) {
+    el("closeInputCorrectionLexiconBtn").onclick = () => el("inputCorrectionLexiconDialog")?.close();
+  }
+  if (el("addInputCorrectionBtn")) {
+    el("addInputCorrectionBtn").onclick = () =>
+      run(() => withButtonBusy("addInputCorrectionBtn", "追加中...", addInputCorrectionWord));
+  }
+  if (el("inputCorrectionWord")) {
+    el("inputCorrectionWord").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      run(() => withButtonBusy("addInputCorrectionBtn", "追加中...", addInputCorrectionWord));
+    });
+  }
+  if (el("inputCorrectionLexiconList")) {
+    el("inputCorrectionLexiconList").addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const toggle = target.closest("[data-input-correction-toggle]");
+      if (toggle instanceof HTMLElement) {
+        run(() =>
+          updateInputCorrectionEnabled(
+            toggle.dataset.inputCorrectionToggle,
+            toggle.dataset.inputCorrectionEnabled === "true",
+          ),
+        );
+        return;
+      }
+      const remove = target.closest("[data-input-correction-delete]");
+      if (remove instanceof HTMLElement) {
+        run(() => deleteInputCorrectionWord(remove.dataset.inputCorrectionDelete));
+      }
+    });
+  }
   if (el("fieldRoleHelpBtn")) el("fieldRoleHelpBtn").onclick = () => el("fieldRoleHelpDialog").showModal();
   if (el("closeFieldRoleHelpBtn")) el("closeFieldRoleHelpBtn").onclick = () => el("fieldRoleHelpDialog").close();
   if (el("configFlowHelpBtn")) el("configFlowHelpBtn").onclick = () => el("configFlowHelpDialog").showModal();
@@ -4631,6 +5114,18 @@ function bind() {
     el("llmSqlResultBtn").onclick = () =>
       run(() => withAgentWait("sqlResult", "SQL 结果 Agent", confirmAndGenerateSqlFromFieldResolution));
   }
+  ["fieldTableName", "relationLeftTable", "relationRightTable"].forEach((id) => {
+    const input = el(id);
+    if (!input) return;
+    ["input", "change", "focus"].forEach((eventName) => {
+      input.addEventListener(eventName, () => syncSceneSchemaInputLists());
+    });
+  });
+  ["fieldName", "relationLeftField", "relationRightField"].forEach((id) => {
+    const input = el(id);
+    if (!input) return;
+    input.addEventListener("focus", () => syncSceneSchemaInputLists());
+  });
   el("llmFieldsSelectAllBtn").onclick = () => run(() => setAllLlmCandidates("field", true));
   el("llmFieldsSelectNoneBtn").onclick = () => run(() => setAllLlmCandidates("field", false));
   el("llmRelationsSelectAllBtn").onclick = () => run(() => setAllLlmCandidates("relation", true));

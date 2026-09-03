@@ -244,8 +244,190 @@ select {
 #queryIntentInput {
   width: 100%;
   min-height: 88px;
-  margin: 8px 0;
+  margin: 0;
   resize: vertical;
+}
+
+.query-intent-input-wrap {
+  position: relative;
+  margin: 8px 0;
+}
+
+.query-intent-highlight {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  padding: 10px 12px;
+  overflow: hidden;
+  color: var(--text-main);
+  font: inherit;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+
+.query-intent-input-wrap #queryIntentInput {
+  position: relative;
+  z-index: 1;
+}
+
+.query-intent-input-wrap.has-correction-highlights #queryIntentInput {
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text-main);
+}
+
+.query-intent-input-wrap.has-correction-highlights #queryIntentInput::selection {
+  color: transparent;
+  background: rgba(103, 195, 255, 0.34);
+}
+
+.query-intent-highlight mark {
+  border-radius: 3px;
+  background: rgba(251, 191, 36, 0.3);
+  box-shadow: inset 0 -1px 0 rgba(253, 224, 71, 0.92);
+  color: #ffe89d;
+}
+
+.intent-correction-panel {
+  margin: 8px 0 10px;
+  padding: 10px;
+  border: 1px solid rgba(244, 184, 74, 0.58);
+  border-radius: 8px;
+  background: rgba(86, 60, 15, 0.18);
+}
+
+.intent-correction-head {
+  margin-bottom: 7px;
+}
+
+.intent-correction-head h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.intent-correction-list {
+  display: grid;
+  gap: 6px;
+}
+
+.intent-correction-apply {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid rgba(245, 190, 70, 0.32);
+  border-radius: 6px;
+  background: rgba(6, 20, 34, 0.48);
+  color: var(--text-main);
+  text-align: left;
+}
+
+.intent-correction-apply::after {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 48px));
+  padding: 7px 9px;
+  border: 1px solid rgba(253, 224, 71, 0.72);
+  border-radius: 5px;
+  background: #10263a;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+  color: #fff1bd;
+  content: attr(data-tooltip);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: pre-line;
+}
+
+.intent-correction-apply:hover,
+.intent-correction-apply:focus-visible {
+  border-color: rgba(253, 224, 71, 0.86);
+  background: rgba(121, 86, 19, 0.3);
+  outline: none;
+}
+
+.intent-correction-apply:hover::after,
+.intent-correction-apply:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.intent-correction-check {
+  color: #ffe89d;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.intent-correction-original {
+  overflow: hidden;
+  color: #ffe89d;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-correction-arrow {
+  color: var(--text-muted);
+}
+
+.intent-correction-target {
+  overflow: hidden;
+  color: #80e6bc;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input-correction-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.input-correction-add-row input {
+  margin: 0;
+}
+
+.input-correction-lexicon-list {
+  display: grid;
+  gap: 7px;
+}
+
+.input-correction-lexicon-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid rgba(95, 145, 191, 0.36);
+  border-radius: 6px;
+  background: rgba(6, 20, 34, 0.42);
+}
+
+.input-correction-lexicon-word {
+  overflow: hidden;
+  color: #80e6bc;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input-correction-lexicon-row.is-disabled {
+  opacity: 0.55;
 }
 
 .query-band-toolbar {

@@ -13,6 +13,7 @@ from ..services.scene_cache_service import scene_cache_service
 from ..services.scene_playbooks import get_scene_playbook
 from ..services.prd_scene_configs import build_prd_scene_templates
 from ..services.semantic_field_cache_service import semantic_field_cache_service
+from ..services.schema_validation_service import build_schema_index, resolve_table_field
 from packages.shared_contracts.python_models import FieldRole, SceneDTO, SceneFieldDTO, SceneRelationDTO
 
 router = APIRouter(prefix="/api/v1/scenes", tags=["scenes"])
@@ -471,11 +472,15 @@ async def add_scene_field(scene_id: str, body: AddSceneFieldRequest) -> SceneFie
     scene = scene_cache_service.get_scene(scene_id)
     if not scene:
         raise HTTPException(status_code=404, detail="scene not found")
+    schema_index = build_schema_index(force_refresh=True)
+    validation = resolve_table_field(body.table_name, body.field_name, schema_index=schema_index)
+    if not validation.get("ok"):
+        raise HTTPException(status_code=422, detail=str(validation.get("message") or "database schema validation failed"))
 
     field = SceneFieldDTO(
         field_id=f"field_{uuid4().hex[:10]}",
-        table_name=body.table_name.strip(),
-        field_name=body.field_name.strip(),
+        table_name=validation.get("table_name", body.table_name.strip()),
+        field_name=validation.get("field_name", body.field_name.strip()),
         semantic_name=body.semantic_name.strip(),
         description=body.description.strip(),
         role=body.role,
@@ -492,13 +497,20 @@ async def add_scene_relation(scene_id: str, body: AddSceneRelationRequest) -> Sc
     scene = scene_cache_service.get_scene(scene_id)
     if not scene:
         raise HTTPException(status_code=404, detail="scene not found")
+    schema_index = build_schema_index(force_refresh=True)
+    left_validation = resolve_table_field(body.left_table, body.left_field, schema_index=schema_index)
+    if not left_validation.get("ok"):
+        raise HTTPException(status_code=422, detail=str(left_validation.get("message") or "database schema validation failed"))
+    right_validation = resolve_table_field(body.right_table, body.right_field, schema_index=schema_index)
+    if not right_validation.get("ok"):
+        raise HTTPException(status_code=422, detail=str(right_validation.get("message") or "database schema validation failed"))
 
     relation = SceneRelationDTO(
         relation_id=f"rel_{uuid4().hex[:10]}",
-        left_table=body.left_table.strip(),
-        left_field=body.left_field.strip(),
-        right_table=body.right_table.strip(),
-        right_field=body.right_field.strip(),
+        left_table=left_validation.get("table_name", body.left_table.strip()),
+        left_field=left_validation.get("field_name", body.left_field.strip()),
+        right_table=right_validation.get("table_name", body.right_table.strip()),
+        right_field=right_validation.get("field_name", body.right_field.strip()),
         join_type=body.join_type.strip().upper(),
         note=body.note.strip(),
     )

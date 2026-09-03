@@ -80,10 +80,12 @@ async def save_scene_builder_draft(scene_id: str, body: DraftStateRequest) -> di
 
 
 @router.get("/scenes/{scene_id}/source-schema")
-async def get_source_schema(scene_id: str) -> dict:
+async def get_source_schema(scene_id: str, force_refresh: bool = True) -> dict:
     scene = scene_cache_service.get_scene(scene_id)
     if not scene:
         raise HTTPException(status_code=404, detail="scene not found")
+    if force_refresh:
+        service.refresh_schema_cache()
     snapshot = service.schema_snapshot()
     snapshot["scene_id"] = scene_id
     return snapshot

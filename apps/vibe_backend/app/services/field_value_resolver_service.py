@@ -5,11 +5,16 @@ import os
 import re
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from typing import Any, Callable
 
 import pymysql
+
+from .input_correction_lexicon_service import (
+    input_correction_lexicon_service,
+    normalize_correction_word,
+)
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -173,6 +178,7 @@ class FieldValueResolverService:
 
     def __init__(self) -> None:
         self._value_cache: dict[tuple[str, str, str, int], tuple[float, list[FieldValueCandidate]]] = {}
+        self._brand_usage_cache: dict[tuple[str, tuple[str, ...], bool], tuple[float, dict[str, dict[str, int]]]] = {}
 
     @property
     def max_distinct_values(self) -> int:
@@ -456,6 +462,13 @@ class FieldValueResolverService:
             else:
                 exact_matches = [item for item in values if item.normalized == raw_key]
             if exact_matches:
+                if self._is_standard_brand_field({"table_name": table_name, "field_name": field_name}) and all(
+                    item.count == 0 and item.recent_count == 0 for item in exact_matches
+                ):
+                    exact_matches = self._hydrate_brand_usage_counts(
+                        exact_matches,
+                        prefer_recent=prefer_recent,
+                    )
                 exact_matches = sorted(
                     exact_matches,
                     key=lambda item: (
@@ -543,6 +556,12 @@ class FieldValueResolverService:
         )
         terms = self._extract_lookup_terms(intent_text, brand_values=brand_values)
         prefer_recent = self._intent_prefers_recent_values(intent_text)
+        correction_words = input_correction_lexicon_service.list_words()
+        corrections = self._suggest_intent_corrections(
+            terms=terms,
+            correction_words=correction_words,
+            brand_values=brand_values,
+        )
 
         # Brand recognition is the common path for natural-language questions.
         # Resolve it from the small dictionary first. Only load large business
@@ -599,6 +618,7 @@ class FieldValueResolverService:
                 "needs_confirmation": bool(ambiguous),
                 "term_count": len(terms),
                 "matched_term_count": len(groups),
+                "corrections": corrections,
                 "resolved_terms": resolved,
                 "ambiguous_terms": ambiguous,
                 "terms": groups,
@@ -694,6 +714,177 @@ class FieldValueResolverService:
                 )
 
         return build_analysis()
+
+    def _suggest_intent_corrections(
+        self,
+        *,
+        terms: list[dict[str, str]],
+        correction_words: list[dict[str, Any]],
+        brand_values: list[FieldValueCandidate],
+    ) -> list[dict[str, Any]]:
+        """Suggest only user-confirmable wording corrections.
+
+        The correction lexicon is deliberately separate from database semantics:
+        it supplies an approved spelling such as ``thenorthface``. The existing
+        field resolver still turns that spelling into a standard field value and
+        SQL filter after the user confirms it.
+        """
+        entries = [
+            {
+                "correct_word": str(item.get("correct_word") or "").strip(),
+                "normalized_word": str(item.get("normalized_word") or "").strip()
+                or normalize_correction_word(item.get("correct_word")),
+            }
+            for item in correction_words
+            if isinstance(item, dict) and bool(item.get("enabled", True))
+        ]
+        entries = [item for item in entries if item["correct_word"] and item["normalized_word"]]
+        if not entries or not terms:
+            return []
+
+        manual_brand_canonicals: dict[str, set[str]] = {}
+        for entry in entries:
+            manual_brand_canonicals[entry["normalized_word"]] = {
+                item.value
+                for item in brand_values
+                if item.normalized == entry["normalized_word"] and item.value
+            }
+
+        suggestions: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for term in terms:
+            raw_value = str(term.get("text") or "").strip()
+            raw_key = normalize_correction_word(raw_value)
+            if not raw_value or len(raw_key) < 2:
+                continue
+
+            bridge_canonicals = self._resolved_brand_canonicals(raw_value, brand_values)
+            qualifier = self._input_brand_qualifier(raw_value, brand_values)
+            match_key = self._correction_match_key(
+                raw_key=raw_key,
+                qualifier=qualifier,
+            )
+            for entry in entries:
+                correct_word = entry["correct_word"]
+                target_key = entry["normalized_word"]
+                if raw_value == correct_word:
+                    continue
+
+                score, strategy, reason = self._manual_correction_match(
+                    raw_key=match_key,
+                    target_key=target_key,
+                )
+                target_canonicals = manual_brand_canonicals.get(target_key, set())
+                if not strategy and bridge_canonicals and target_canonicals.intersection(bridge_canonicals):
+                    score = 1.0
+                    strategy = "dictionary_alias"
+                    reason = "品牌标准字典中的别名或英文名已关联到该正确写法"
+                if not strategy:
+                    continue
+
+                suggested_word = self._append_correction_qualifier(
+                    correct_word=correct_word,
+                    qualifier=qualifier,
+                )
+                if raw_value == suggested_word:
+                    continue
+                key = (raw_value.casefold(), suggested_word.casefold())
+                if key in seen:
+                    continue
+                seen.add(key)
+                suggestions.append(
+                    {
+                        "term": raw_value,
+                        "suggested_word": suggested_word,
+                        "correct_word": correct_word,
+                        "score": round(score, 4),
+                        "confidence": round(score, 4),
+                        "strategy": strategy,
+                        "reason": reason,
+                        "source": str(term.get("source") or ""),
+                    }
+                )
+
+        return sorted(
+            suggestions,
+            key=lambda item: (
+                float(item.get("confidence") or 0),
+                len(str(item.get("term") or "")),
+            ),
+            reverse=True,
+        )[:12]
+
+    def _manual_correction_match(
+        self,
+        *,
+        raw_key: str,
+        target_key: str,
+    ) -> tuple[float, str, str]:
+        if raw_key == target_key:
+            return 1.0, "normalized_exact", "已忽略大小写、空格和全角半角"
+        if len(raw_key) < 3 or len(target_key) < 3:
+            return 0.0, "", ""
+        score = SequenceMatcher(None, raw_key, target_key).ratio()
+        has_cjk = bool(re.search(r"[\u3400-\u9fff]", raw_key + target_key))
+        if has_cjk:
+            shared_edge = raw_key[:2] == target_key[:2] or raw_key[-2:] == target_key[-2:]
+            if score >= 0.66 and shared_edge:
+                return score, "fuzzy", "检测到中文词的少字、多字或同位置字符替换"
+            return 0.0, "", ""
+        if score >= 0.84 and min(len(raw_key), len(target_key)) >= 5:
+            return score, "fuzzy", "检测到英文词的字符错位、少字或多字"
+        return 0.0, "", ""
+
+    def _resolved_brand_canonicals(
+        self,
+        raw_value: str,
+        brand_values: list[FieldValueCandidate],
+    ) -> set[str]:
+        if not brand_values:
+            return set()
+        resolved = self.resolve_field_value(
+            table_name="dict_brand_info",
+            field_name="Name",
+            raw_value=raw_value,
+            semantic_name="品牌",
+            candidate_values=brand_values,
+        )
+        if not resolved.get("resolved"):
+            return set()
+        values = {str(resolved.get("canonical_value") or "").strip()}
+        for item in resolved.get("candidates") if isinstance(resolved.get("candidates"), list) else []:
+            if isinstance(item, dict):
+                values.add(str(item.get("value") or "").strip())
+        return {item for item in values if item}
+
+    def _input_brand_qualifier(
+        self,
+        raw_value: str,
+        brand_values: list[FieldValueCandidate],
+    ) -> str:
+        direct_qualifiers = self._bracket_qualifiers(raw_value)
+        if direct_qualifiers:
+            return direct_qualifiers[0]
+        raw_key = normalize_lookup_value(raw_value, drop_bracket_notes=False)
+        candidates: list[tuple[str, str]] = []
+        for item in brand_values:
+            for qualifier in self._bracket_qualifiers(item.value):
+                qualifier_key = normalize_lookup_value(qualifier, drop_bracket_notes=False)
+                if qualifier_key and len(raw_key) > len(qualifier_key) and raw_key.endswith(qualifier_key):
+                    candidates.append((qualifier, qualifier_key))
+        return max(candidates, key=lambda item: len(item[1]))[0] if candidates else ""
+
+    def _append_correction_qualifier(self, *, correct_word: str, qualifier: str) -> str:
+        if not qualifier or self._bracket_qualifiers(correct_word):
+            return correct_word
+        return f"{correct_word}（{qualifier}）"
+
+    @staticmethod
+    def _correction_match_key(*, raw_key: str, qualifier: str) -> str:
+        qualifier_key = normalize_correction_word(qualifier)
+        if qualifier_key and raw_key.endswith(qualifier_key) and len(raw_key) > len(qualifier_key):
+            return raw_key[: -len(qualifier_key)]
+        return raw_key
 
     def _candidate_count(self, resolved_payload: dict[str, Any]) -> int:
         candidates = resolved_payload.get("candidates")
@@ -828,7 +1019,7 @@ class FieldValueResolverService:
         if qualifiers:
             qualifier_pattern = "|".join(re.escape(item) for item in qualifiers)
             brand_token_pattern = (
-                r"(?:[A-Za-z][A-Za-z0-9._&'’/-]*"
+                r"(?:[A-Za-z][A-Za-z0-9._&'’/-]*(?:\s+[A-Za-z0-9._&'’/-]+){0,5}"
                 r"|[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]{2,32})"
             )
             qualified_phrase_re = re.compile(
@@ -894,8 +1085,16 @@ class FieldValueResolverService:
                 # Allow short but meaningful omissions such as "日本" -> "日".
                 for length in range(1, len(qualifier)):
                     prefix = qualifier[:length].strip()
-                    if normalize_lookup_value(prefix, drop_bracket_notes=False):
-                        qualifiers.add(prefix)
+                    prefix_key = normalize_lookup_value(prefix, drop_bracket_notes=False)
+                    if not prefix_key:
+                        continue
+                    # A one-character Chinese/Japanese qualifier ("日") is a
+                    # meaningful shorthand. A one-character Latin prefix
+                    # ("E" from "EU"), however, can split "THE NORTH FACE"
+                    # into fake brand/qualifier fragments.
+                    if len(prefix) == 1 and not re.fullmatch(r"[\u3040-\u30ff\u3400-\u9fff]", prefix):
+                        continue
+                    qualifiers.add(prefix)
         return sorted(qualifiers, key=lambda item: (len(item), item), reverse=True)
 
     def _brand_qualified_candidates(
@@ -1631,6 +1830,104 @@ class FieldValueResolverService:
                                     )
                                 )
         return candidates
+
+    def _hydrate_brand_usage_counts(
+        self,
+        candidates: list[FieldValueCandidate],
+        *,
+        prefer_recent: bool = False,
+    ) -> list[FieldValueCandidate]:
+        source_codes = sorted(
+            {
+                str(item.source_code or "").strip()
+                for item in candidates
+                if str(item.source_code or "").strip()
+            }
+        )
+        if not source_codes:
+            return candidates
+
+        usage_counts = self._load_brand_usage_counts(
+            source_codes=source_codes,
+            prefer_recent=prefer_recent,
+        )
+        if not usage_counts:
+            return candidates
+
+        hydrated: list[FieldValueCandidate] = []
+        for item in candidates:
+            source_code = str(item.source_code or "").strip()
+            counts = usage_counts.get(source_code)
+            if not counts:
+                hydrated.append(item)
+                continue
+            hydrated.append(
+                replace(
+                    item,
+                    count=int(counts.get("count") or item.count),
+                    recent_count=int(counts.get("recent_count") or item.recent_count),
+                )
+            )
+        return hydrated
+
+    def _load_brand_usage_counts(
+        self,
+        *,
+        source_codes: list[str],
+        prefer_recent: bool = False,
+    ) -> dict[str, dict[str, int]]:
+        codes = [str(code or "").strip() for code in source_codes if str(code or "").strip()]
+        if not codes:
+            return {}
+        cache_key = (_mysql_config()["database"], tuple(codes), prefer_recent)
+        cached = self._brand_usage_cache.get(cache_key)
+        now = time.time()
+        if cached and now - cached[0] <= self.cache_ttl_seconds:
+            return cached[1]
+
+        placeholders = ", ".join(["%s"] * len(codes))
+        query = f"""
+            SELECT
+              CAST(ci.`BrandCode` AS CHAR) AS source_code,
+              COUNT(1) AS count,
+              SUM(
+                CASE
+                  WHEN ci.`ReceiveTime` >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1
+                  ELSE 0
+                END
+              ) AS recent_count
+            FROM `clothing_info` ci
+            WHERE ci.`BrandCode` IN ({placeholders})
+            GROUP BY ci.`BrandCode`
+        """
+        try:
+            conn = pymysql.connect(
+                **_mysql_config(
+                    connect_timeout=self.query_timeout_seconds,
+                    read_timeout=self.query_timeout_seconds,
+                    write_timeout=self.query_timeout_seconds,
+                )
+            )
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(query, codes)
+                    rows = cur.fetchall() or []
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            self._brand_usage_cache[cache_key] = (now, {})
+            return {}
+
+        usage_counts = {
+            str(row.get("source_code") or "").strip(): {
+                "count": int(row.get("count") or 0),
+                "recent_count": int(row.get("recent_count") or 0),
+            }
+            for row in rows
+            if str(row.get("source_code") or "").strip()
+        }
+        self._brand_usage_cache[cache_key] = (now, usage_counts)
+        return usage_counts
 
     def _bracket_qualifiers(self, value: Any) -> list[str]:
         text = unicodedata.normalize("NFKC", str(value or "")).strip()

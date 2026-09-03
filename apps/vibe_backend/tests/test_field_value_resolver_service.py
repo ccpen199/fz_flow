@@ -173,3 +173,99 @@ def test_incremental_match_merge_keeps_highest_confidence_candidate() -> None:
     assert len(matches) == 1
     assert matches[0]["canonical_value"] == "优衣库（中国）"
     assert matches[0]["confidence"] == 1.0
+
+
+def test_manual_correction_suggests_target_for_case_spacing_and_transpose() -> None:
+    service = FieldValueResolverService()
+    correction_words = [
+        {
+            "correct_word": "thenorthface",
+            "normalized_word": "thenorthface",
+            "enabled": True,
+        }
+    ]
+    terms = [
+        {"text": "THE NORTH FACE", "source": "phrase"},
+        {"text": "the norht face", "source": "phrase"},
+    ]
+    brand_values = [
+        FieldValueCandidate(value="THE NORTH FACE", count=0, normalized="thenorthface"),
+    ]
+
+    suggestions = service._suggest_intent_corrections(
+        terms=terms,
+        correction_words=correction_words,
+        brand_values=brand_values,
+    )
+
+    assert {(item["term"], item["suggested_word"]) for item in suggestions} == {
+        ("THE NORTH FACE", "thenorthface"),
+        ("the norht face", "thenorthface"),
+    }
+    assert {item["strategy"] for item in suggestions} == {"normalized_exact", "fuzzy"}
+
+
+def test_manual_correction_bridges_brand_alias_without_storing_field_mapping() -> None:
+    service = FieldValueResolverService()
+    correction_words = [
+        {
+            "correct_word": "thenorthface",
+            "normalized_word": "thenorthface",
+            "enabled": True,
+        }
+    ]
+    brand_values = [
+        FieldValueCandidate(value="THE NORTH FACE", count=0, normalized="thenorthface"),
+        FieldValueCandidate(value="THE NORTH FACE", count=0, normalized="北面"),
+    ]
+
+    suggestions = service._suggest_intent_corrections(
+        terms=[{"text": "北面", "source": "phrase"}],
+        correction_words=correction_words,
+        brand_values=brand_values,
+    )
+
+    assert len(suggestions) == 1
+    assert suggestions[0]["term"] == "北面"
+    assert suggestions[0]["suggested_word"] == "thenorthface"
+    assert suggestions[0]["strategy"] == "dictionary_alias"
+
+
+def test_manual_correction_keeps_region_note_when_suggesting_target() -> None:
+    service = FieldValueResolverService()
+    suggestions = service._suggest_intent_corrections(
+        terms=[{"text": "the norht face（中国）", "source": "qualified_bracket"}],
+        correction_words=[
+            {
+                "correct_word": "thenorthface",
+                "normalized_word": "thenorthface",
+                "enabled": True,
+            }
+        ],
+        brand_values=[
+            FieldValueCandidate(value="THE NORTH FACE（中国）", count=0, normalized="thenorthface"),
+        ],
+    )
+
+    assert len(suggestions) == 1
+    assert suggestions[0]["suggested_word"] == "thenorthface（中国）"
+    assert suggestions[0]["strategy"] == "fuzzy"
+    assert suggestions[0]["reason"] == "检测到英文词的字符错位、少字或多字"
+
+
+def test_multiword_english_brand_is_not_split_by_single_letter_qualifier() -> None:
+    service = FieldValueResolverService()
+    values = [
+        FieldValueCandidate(value="样例品牌（EU）", count=0, normalized="sample"),
+        FieldValueCandidate(value="THE NORTH FACE", count=0, normalized="thenorthface"),
+    ]
+
+    qualifiers = service._brand_qualifiers(values)
+    terms = service._extract_lookup_terms(
+        "统计 THE NORTH FACE 最近30天上新商品数量",
+        brand_values=values,
+    )
+
+    assert "E" not in qualifiers
+    assert {"text": "THE NORTH FACE", "source": "phrase"} in terms
+    assert all(item["text"] not in {"THE", "NOR", "FACE"} for item in terms)

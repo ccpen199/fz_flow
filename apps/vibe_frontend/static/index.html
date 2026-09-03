@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FZ 智能分析工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20260804-config-flow-help" />
+    <link rel="stylesheet" href="./styles.css?v=20260825-smart-correction" />
   </head>
   <body>
     <div class="app-bg"></div>
@@ -234,11 +234,11 @@
                       </label>
                       <label class="form-field">
                         <span class="form-field-label">table_name</span>
-                        <input id="fieldTableName" placeholder="如 f_order_item" />
+                        <input id="fieldTableName" placeholder="如 f_order_item" autocomplete="off" list="sceneTableOptions" />
                       </label>
                       <label class="form-field">
                         <span class="form-field-label">field_name</span>
-                        <input id="fieldName" placeholder="如 pay_amount" />
+                        <input id="fieldName" placeholder="如 pay_amount" autocomplete="off" list="fieldNameOptions" />
                       </label>
                       <label class="form-field">
                         <span class="form-field-label">别名 aliases（可选）</span>
@@ -291,19 +291,19 @@
                     <div class="inline-form">
                       <label class="form-field">
                         <span class="form-field-label">left_table</span>
-                        <input id="relationLeftTable" placeholder="如 clothing_info" />
+                        <input id="relationLeftTable" placeholder="如 clothing_info" autocomplete="off" list="sceneTableOptions" />
                       </label>
                       <label class="form-field">
                         <span class="form-field-label">left_field</span>
-                        <input id="relationLeftField" placeholder="如 ClothingId" />
+                        <input id="relationLeftField" placeholder="如 ClothingId" autocomplete="off" list="relationLeftFieldOptions" />
                       </label>
                       <label class="form-field">
                         <span class="form-field-label">right_table</span>
-                        <input id="relationRightTable" placeholder="如 clothing_scene_info" />
+                        <input id="relationRightTable" placeholder="如 clothing_scene_info" autocomplete="off" list="sceneTableOptions" />
                       </label>
                       <label class="form-field">
                         <span class="form-field-label">right_field</span>
-                        <input id="relationRightField" placeholder="如 ClothingId" />
+                        <input id="relationRightField" placeholder="如 ClothingId" autocomplete="off" list="relationRightFieldOptions" />
                       </label>
                       <label class="form-field">
                         <span class="form-field-label">join_type</span>
@@ -338,13 +338,26 @@
             <article class="card span-2">
               <div class="section-head">
                 <h3>问题 / 查询意图</h3>
-                <button id="toggleIntentTemplatesBtn" class="secondary compact-btn">预制问题</button>
+                <div class="actions compact-actions">
+                  <button id="toggleIntentTemplatesBtn" class="secondary compact-btn">预制问题</button>
+                  <button id="openInputCorrectionLexiconBtn" class="secondary compact-btn" type="button">纠错词库</button>
+                </div>
               </div>
               <div id="intentTemplatesWrap" hidden>
                 <p class="muted">点击下方预制问题，可自动填入意图输入框。</p>
                 <div id="intentTemplateButtons" class="intent-template-list"></div>
               </div>
-              <textarea id="queryIntentInput" placeholder="例如：按品牌统计价格带分布和占比，默认自定义分桶，可设置桶数、策略和边界"></textarea>
+              <div id="queryIntentInputWrap" class="query-intent-input-wrap">
+                <div id="queryIntentHighlight" class="query-intent-highlight" aria-hidden="true"></div>
+                <textarea id="queryIntentInput" placeholder="例如：按品牌统计价格带分布和占比，默认自定义分桶，可设置桶数、策略和边界"></textarea>
+              </div>
+              <div id="intentCorrectionPanel" class="intent-correction-panel" hidden>
+                <div class="section-head intent-correction-head">
+                  <h4>输入纠错建议</h4>
+                  <span id="intentCorrectionSummary" class="muted"></span>
+                </div>
+                <div id="intentCorrectionList" class="intent-correction-list"></div>
+              </div>
               <div class="query-band-toolbar" hidden>
                 <div class="query-band-control query-band-mode-control">
                   <span class="label">价格带模式</span>
@@ -605,6 +618,27 @@ note：纤维编码映射到标准纤维字典。</pre>
         <p>如果你的库不是按 <code>Name</code> / <code>Code</code> 组织，把上面的表名和字段名换成你库里的真实字段就行；但像这种字典树，最好先用视图把子树收口，再让场景去连这个视图。</p>
       </div>
     </dialog>
-    <script src="./main.js?v=20260804-config-flow-help"></script>
+    <dialog id="inputCorrectionLexiconDialog" class="guide-dialog mini-guide-dialog">
+      <div class="guide-head">
+        <h3>纠错词库</h3>
+        <button id="closeInputCorrectionLexiconBtn" class="secondary" type="button">关闭</button>
+      </div>
+      <div class="guide-body">
+        <div class="input-correction-editor">
+          <label class="label" for="inputCorrectionWord">正确写法</label>
+          <div class="input-correction-add-row">
+            <input id="inputCorrectionWord" placeholder="例如：thenorthface" autocomplete="off" />
+            <button id="addInputCorrectionBtn" type="button">追加</button>
+          </div>
+          <p id="inputCorrectionLexiconHint" class="muted"></p>
+        </div>
+        <div id="inputCorrectionLexiconList" class="input-correction-lexicon-list"></div>
+      </div>
+    </dialog>
+    <datalist id="sceneTableOptions"></datalist>
+    <datalist id="fieldNameOptions"></datalist>
+    <datalist id="relationLeftFieldOptions"></datalist>
+    <datalist id="relationRightFieldOptions"></datalist>
+    <script src="./main.js?v=20260825-smart-correction"></script>
   </body>
 </html>

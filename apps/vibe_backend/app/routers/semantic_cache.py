@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from ..services.semantic_field_cache_service import semantic_field_cache_service
 from ..services.scene_cache_service import scene_cache_service
+from ..services.schema_validation_service import build_schema_index, resolve_table_field
 
 router = APIRouter(prefix="/api/v1/semantic-cache", tags=["semantic-cache"])
 
@@ -72,6 +73,10 @@ async def add_scene_semantic_field(scene_id: str, body: SemanticFieldUpsertReque
     scene = scene_cache_service.get_scene(scene_id)
     if not scene:
         raise HTTPException(status_code=404, detail="scene not found")
+    schema_index = build_schema_index(force_refresh=True)
+    validation = resolve_table_field(body.table_name, body.field_name, schema_index=schema_index)
+    if not validation.get("ok"):
+        raise HTTPException(status_code=422, detail=str(validation.get("message") or "database schema validation failed"))
     try:
         row = semantic_field_cache_service.upsert_field(
             scene_id,
@@ -81,8 +86,8 @@ async def add_scene_semantic_field(scene_id: str, body: SemanticFieldUpsertReque
                 "aliases": body.aliases,
                 "unit": body.unit,
                 "aggregation": body.aggregation,
-                "table_name": body.table_name,
-                "field_name": body.field_name,
+                "table_name": validation.get("table_name", body.table_name),
+                "field_name": validation.get("field_name", body.field_name),
                 "er_path": body.er_path,
                 "role": body.role,
                 "zone": body.zone,
@@ -122,6 +127,12 @@ async def patch_scene_semantic_field(scene_id: str, cache_id: str, body: Semanti
         "zone": body.zone if body.zone is not None else current.get("zone", "modeled"),
         "enabled": body.enabled if body.enabled is not None else bool(current.get("enabled", True)),
     }
+    schema_index = build_schema_index(force_refresh=True)
+    validation = resolve_table_field(str(payload["table_name"]), str(payload["field_name"]), schema_index=schema_index)
+    if not validation.get("ok"):
+        raise HTTPException(status_code=422, detail=str(validation.get("message") or "database schema validation failed"))
+    payload["table_name"] = validation.get("table_name", payload["table_name"])
+    payload["field_name"] = validation.get("field_name", payload["field_name"])
 
     try:
         row = semantic_field_cache_service.upsert_field(scene_id, payload, cache_id=cache_id)

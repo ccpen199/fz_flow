@@ -398,8 +398,7 @@ def test_non_brand_fiber_value_surfaces_all_matching_candidates_and_count() -> N
     assert result["resolved"] is True
     assert result["ambiguous"] is True
     assert result["candidate_count"] == len(fiber_values)
-    expected_visible = {item for item, _ in sorted(zip(fiber_values, range(1, 10)), key=lambda pair: pair[1], reverse=True)[:6]}
-    assert {item["value"] for item in result["candidates"]} == expected_visible
+    assert {item["value"] for item in result["candidates"]} == set(fiber_values)
 
 
 def test_incremental_analysis_propagates_candidate_count_to_each_match() -> None:

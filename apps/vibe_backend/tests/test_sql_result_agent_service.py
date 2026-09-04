@@ -39,7 +39,13 @@ def test_queryable_fields_merge_current_scene_fields_with_stale_cache(monkeypatc
                 table_name="clothing_info",
                 field_name="SubCategory",
                 role="dimension",
-            )
+            ),
+            SimpleNamespace(
+                semantic_name="旧叶子类目",
+                table_name="clothing_info",
+                field_name="LeafCategory",
+                role="dimension",
+            ),
         ],
     )
 

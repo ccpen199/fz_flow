@@ -1468,6 +1468,14 @@ class SqlResultAgentService:
 
     def _queryable_semantic_fields(self, scene: SceneDTO) -> list[dict]:
         rows = semantic_field_cache_service.get_queryable_scene_fields(scene.scene_id)
+        scene_physical_keys = {
+            (
+                str(item.table_name or "").strip().lower(),
+                str(item.field_name or "").strip().lower(),
+            )
+            for item in scene.fields
+            if item.enabled
+        }
         result = [
             {
                 "semantic_name": item.semantic_name,
@@ -1476,12 +1484,14 @@ class SqlResultAgentService:
                 "role": item.role,
             }
             for item in rows
+            if (
+                str(item.table_name or "").strip().lower(),
+                str(item.field_name or "").strip().lower(),
+            ) in scene_physical_keys
         ]
         # The semantic cache can be older than the current scene version. Keep
-        # any fields configured on the scene itself so a newly added controlled
-        # field (for example dict_fiber_info.Name) is immediately available to
-        # recognition and SQL generation instead of being hidden by stale
-        # cache rows.
+        # fields configured on the scene itself, while excluding stale cache
+        # rows whose physical table/column is no longer part of this scene.
         existing_keys = {
             (
                 str(item.get("semantic_name") or "").strip().lower(),

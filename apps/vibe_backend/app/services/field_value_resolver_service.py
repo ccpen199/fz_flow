@@ -668,7 +668,7 @@ class FieldValueResolverService:
                         )
                         == field_key
                     )
-                    if field_count >= 6:
+                    if field_count >= 20:
                         continue
                     display_matches.append(match)
                     if len(display_matches) >= 24:
@@ -739,7 +739,7 @@ class FieldValueResolverService:
                             "candidate_count": int(resolved.get("candidate_count") or 1),
                         }
                     ]
-                for candidate in expanded_candidates[:6]:
+                for candidate in expanded_candidates[:20]:
                     canonical_value = str(candidate.get("value") or "").strip() if isinstance(candidate, dict) else ""
                     if not canonical_value:
                         continue
@@ -2236,7 +2236,7 @@ class FieldValueResolverService:
                     "score": round(score, 4) if item.value == canonical or ambiguous else None,
                     "confidence": round(score, 4) if item.value == canonical or ambiguous else None,
                 }
-                for item in unique_candidates[:6]
+                for item in unique_candidates[:20]
             ],
         }
 

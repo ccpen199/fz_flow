@@ -1,6 +1,7 @@
 from app.services.field_value_resolver_service import (
     FieldValueCandidate,
     FieldValueResolverService,
+    normalize_lookup_value,
 )
 
 
@@ -348,3 +349,76 @@ def test_analyze_intent_resolves_brand_category_and_fiber_together() -> None:
         "标准纤维名称",
     }
     assert all(item["resolution_mode"] == "controlled" for item in context["fields"])
+
+
+def test_non_brand_category_value_surfaces_exact_and_containing_candidates() -> None:
+    service = FieldValueResolverService()
+    result = service.resolve_field_value(
+        table_name="clothing_info",
+        field_name="SubCategory",
+        raw_value="T恤",
+        semantic_name="二级类目",
+        candidate_values=[
+            FieldValueCandidate(value="T恤", count=4353, normalized="t恤"),
+            FieldValueCandidate(value="T恤/Polo衫/背心", count=10814, normalized="t恤polo衫背心"),
+            FieldValueCandidate(value="衬衫", count=3200, normalized="衬衫"),
+        ],
+    )
+
+    assert result["resolved"] is True
+    assert result["ambiguous"] is True
+    assert result["candidate_count"] == 2
+    assert [item["value"] for item in result["candidates"]] == ["T恤", "T恤/Polo衫/背心"]
+
+
+def test_non_brand_fiber_value_surfaces_all_matching_candidates_and_count() -> None:
+    service = FieldValueResolverService()
+    fiber_values = [
+        "BCI棉",
+        "再生棉",
+        "彩棉",
+        "有机棉",
+        "木棉纤维",
+        "棉",
+        "皮马棉",
+        "超仿棉",
+        "长绒棉",
+    ]
+    result = service.resolve_field_value(
+        table_name="dict_fiber_info",
+        field_name="Name",
+        raw_value="棉",
+        semantic_name="标准纤维名称",
+        candidate_values=[
+            FieldValueCandidate(value=value, count=index + 1, normalized=normalize_lookup_value(value))
+            for index, value in enumerate(fiber_values)
+        ],
+    )
+
+    assert result["resolved"] is True
+    assert result["ambiguous"] is True
+    assert result["candidate_count"] == len(fiber_values)
+    expected_visible = {item for item, _ in sorted(zip(fiber_values, range(1, 10)), key=lambda pair: pair[1], reverse=True)[:6]}
+    assert {item["value"] for item in result["candidates"]} == expected_visible
+
+
+def test_incremental_analysis_propagates_candidate_count_to_each_match() -> None:
+    service = FieldValueResolverService()
+    fields = [
+        {"table_name": "dict_fiber_info", "field_name": "Name", "semantic_name": "标准纤维名称", "role": "dimension"},
+    ]
+    values = [
+        FieldValueCandidate(value="棉", count=10, normalized="棉"),
+        FieldValueCandidate(value="有机棉", count=8, normalized="有机棉"),
+    ]
+    service._load_field_values = lambda *, table_name, field_name: values  # type: ignore[method-assign]
+
+    analysis = service.analyze_intent_values(
+        scene={"fields": fields},
+        queryable_fields=fields,
+        intent="棉纤维",
+    )
+
+    matches = analysis["terms"][0]["matches"]
+    assert matches
+    assert all(match["candidate_count"] == 2 for match in matches)

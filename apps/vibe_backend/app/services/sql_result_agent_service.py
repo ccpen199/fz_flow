@@ -1468,16 +1468,49 @@ class SqlResultAgentService:
 
     def _queryable_semantic_fields(self, scene: SceneDTO) -> list[dict]:
         rows = semantic_field_cache_service.get_queryable_scene_fields(scene.scene_id)
-        if rows:
-            return [
+        result = [
+            {
+                "semantic_name": item.semantic_name,
+                "table_name": item.table_name,
+                "field_name": item.field_name,
+                "role": item.role,
+            }
+            for item in rows
+        ]
+        # The semantic cache can be older than the current scene version. Keep
+        # any fields configured on the scene itself so a newly added controlled
+        # field (for example dict_fiber_info.Name) is immediately available to
+        # recognition and SQL generation instead of being hidden by stale
+        # cache rows.
+        existing_keys = {
+            (
+                str(item.get("semantic_name") or "").strip().lower(),
+                str(item.get("table_name") or "").strip().lower(),
+                str(item.get("field_name") or "").strip().lower(),
+            )
+            for item in result
+        }
+        for item in scene.fields:
+            if not item.enabled:
+                continue
+            key = (
+                str(item.semantic_name or "").strip().lower(),
+                str(item.table_name or "").strip().lower(),
+                str(item.field_name or "").strip().lower(),
+            )
+            if not all(key) or key in existing_keys:
+                continue
+            result.append(
                 {
                     "semantic_name": item.semantic_name,
                     "table_name": item.table_name,
                     "field_name": item.field_name,
                     "role": item.role,
                 }
-                for item in rows
-            ]
+            )
+            existing_keys.add(key)
+        if result:
+            return result
         return [
             {
                 "semantic_name": item.semantic_name,

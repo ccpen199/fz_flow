@@ -475,7 +475,21 @@ class FieldValueResolverService:
                     ),
                     reverse=True,
                 )
-                best = self._best_count_candidate(exact_matches, prefer_recent=prefer_recent)
+                exact_value_matches = list(exact_matches)
+                if not self._is_standard_brand_field({"table_name": table_name, "field_name": field_name}):
+                    contains_matches = [
+                        item
+                        for item in values
+                        if item not in exact_matches
+                        and item.normalized != raw_key
+                        and raw_key in item.normalized
+                    ]
+                    exact_matches = [*exact_matches, *sorted(
+                        contains_matches,
+                        key=lambda item: (item.count, len(item.value)),
+                        reverse=True,
+                    )]
+                best = self._best_count_candidate(exact_value_matches, prefer_recent=prefer_recent)
                 return self._resolved_payload(
                     base=result_base,
                     candidate=best,
@@ -483,6 +497,29 @@ class FieldValueResolverService:
                     strategy=strategy,
                     alternatives=exact_matches,
                 )
+
+        contains_matches = []
+        if not self._is_standard_brand_field({"table_name": table_name, "field_name": field_name}):
+            contains_matches = [
+                item
+                for item in values
+                if len(raw_key_without_notes) >= 1
+                and raw_key_without_notes in item.normalized
+            ]
+        if contains_matches:
+            contains_matches = sorted(
+                contains_matches,
+                key=lambda item: (item.normalized == raw_key_without_notes, item.count, len(item.value)),
+                reverse=True,
+            )
+            best = contains_matches[0]
+            return self._resolved_payload(
+                base=result_base,
+                candidate=best,
+                score=1.0 if best.normalized == raw_key_without_notes else 0.92,
+                strategy="contains_candidate",
+                alternatives=contains_matches,
+            )
 
         qualified_values = self._brand_qualified_candidates(
             raw_value=raw_text,
@@ -610,6 +647,32 @@ class FieldValueResolverService:
                 ambiguity_reason = ""
                 if status == "ambiguous":
                     ambiguity_reason = "multiple_fields" if len(distinct_fields) > 1 else "multiple_values"
+                display_matches: list[dict[str, Any]] = []
+                # Keep candidates from every matched field visible. A global
+                # six-item slice can hide the standard dictionary behind a
+                # high-usage raw field (for example, "棉"), making the page
+                # appear to offer only one source of truth.
+                for match in matches:
+                    field_key = (
+                        str(match.get("semantic_name") or "").strip().lower(),
+                        str(match.get("table_name") or "").strip().lower(),
+                        str(match.get("field_name") or "").strip().lower(),
+                    )
+                    field_count = sum(
+                        1
+                        for item in display_matches
+                        if (
+                            str(item.get("semantic_name") or "").strip().lower(),
+                            str(item.get("table_name") or "").strip().lower(),
+                            str(item.get("field_name") or "").strip().lower(),
+                        )
+                        == field_key
+                    )
+                    if field_count >= 6:
+                        continue
+                    display_matches.append(match)
+                    if len(display_matches) >= 24:
+                        break
                 groups.append(
                     {
                         "term_id": hashlib.md5(f"{term_index}|{term_text}".encode("utf-8")).hexdigest()[:12],
@@ -619,7 +682,7 @@ class FieldValueResolverService:
                         "source": term["source"],
                         "status": status,
                         "ambiguity_reason": ambiguity_reason,
-                        "matches": matches[:6],
+                        "matches": display_matches,
                         "recommended_match_index": 0,
                     }
                 )
@@ -673,6 +736,7 @@ class FieldValueResolverService:
                             "count": self._candidate_count(resolved),
                             "recent_count": self._candidate_recent_count(resolved),
                             "score": float(resolved.get("score") or 0),
+                            "candidate_count": int(resolved.get("candidate_count") or 1),
                         }
                     ]
                 for candidate in expanded_candidates[:6]:
@@ -696,6 +760,7 @@ class FieldValueResolverService:
                             "strategy": str(resolved.get("strategy") or ""),
                             "count": int(candidate.get("count") or 0) if isinstance(candidate, dict) else self._candidate_count(resolved),
                             "recent_count": int(candidate.get("recent_count") or 0) if isinstance(candidate, dict) else self._candidate_recent_count(resolved),
+                            "candidate_count": int(candidate.get("candidate_count") or resolved.get("candidate_count") or len(expanded_candidates)) if isinstance(candidate, dict) else int(resolved.get("candidate_count") or len(expanded_candidates)),
                         }
                     )
 
@@ -2154,7 +2219,7 @@ class FieldValueResolverService:
                 continue
             seen_values.add(value_key)
             unique_candidates.append(item)
-        ambiguous = strategy == "normalized_exact" and len(unique_candidates) > 1
+        ambiguous = strategy in {"normalized_exact", "contains_candidate"} and len(unique_candidates) > 1
         return {
             **base,
             "canonical_value": canonical,
@@ -2163,6 +2228,7 @@ class FieldValueResolverService:
             "changed": canonical != raw_value,
             "score": round(score, 4),
             "strategy": strategy,
+            "candidate_count": len(unique_candidates),
             "candidates": [
                 {
                     "value": item.value,

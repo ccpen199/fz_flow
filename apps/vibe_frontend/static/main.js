@@ -1344,7 +1344,7 @@ function renderFieldResolutionPanel() {
         choices.push({
           value,
           label: `${match.semantic_name || "-"} = ${match.canonical_value || "-"}`,
-          detail: `${match.table_name || "-"}.${match.field_name || "-"} · 置信度 ${Number(match.confidence ?? match.score ?? 0).toFixed(2)}${Number(match.count || 0) ? ` · ${Number(match.count || 0)}条` : ""}`,
+          detail: `${match.table_name || "-"}.${match.field_name || "-"} · 置信度 ${Number(match.confidence ?? match.score ?? 0).toFixed(2)}${Number(match.count || 0) ? ` · ${Number(match.count || 0)}条` : ""}${Number(match.candidate_count || 0) > 1 ? ` · 共${Number(match.candidate_count)}个候选` : ""}`,
         });
       });
       const activeChoice = choices.find((choice) => choice.value === currentValue) || choices[0];

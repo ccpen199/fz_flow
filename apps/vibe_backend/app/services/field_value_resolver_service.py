@@ -207,10 +207,6 @@ class FieldValueResolverService:
         intent: str = "",
     ) -> dict[str, Any]:
         fields = self._candidate_fields(scene=scene, queryable_fields=queryable_fields)
-        fields = self._fast_lookup_fields_for_intent(
-            fields=fields,
-            intent=intent,
-        )
         field_contexts: list[dict[str, Any]] = []
         remaining_total = int(os.getenv("FIELD_VALUE_RESOLVER_CONTEXT_TOTAL_LIMIT", "260"))
         for field in fields:
@@ -228,6 +224,7 @@ class FieldValueResolverService:
                     "semantic_name": _field_attr(field, "semantic_name"),
                     "table_name": _field_attr(field, "table_name"),
                     "field_name": _field_attr(field, "field_name"),
+                    "resolution_mode": self._field_resolution_mode(field),
                     "canonical_values": [
                         {"value": item.value, "count": item.count}
                         for item in values[:value_limit]
@@ -555,6 +552,22 @@ class FieldValueResolverService:
             else []
         )
         terms = self._extract_lookup_terms(intent_text, brand_values=brand_values)
+        field_values: list[tuple[Any, list[FieldValueCandidate]]] = []
+        for field in fields:
+            if brand_field is not None and field is brand_field:
+                values = brand_values
+            else:
+                values = self._load_field_values(
+                    table_name=_field_attr(field, "table_name"),
+                    field_name=_field_attr(field, "field_name"),
+                )
+            if values:
+                field_values.append((field, values))
+        terms = self._augment_terms_from_field_values(
+            intent_text,
+            terms,
+            field_values,
+        )
         prefer_recent = self._intent_prefers_recent_values(intent_text)
         correction_words = input_correction_lexicon_service.list_words()
         corrections = self._suggest_intent_corrections(
@@ -686,28 +699,18 @@ class FieldValueResolverService:
                         }
                     )
 
-        if brand_field is not None and brand_values:
-            process_field(brand_field, brand_values)
-            emit_progress("brand", "品牌标准字典已查询，候选已追加")
-
-        if self._intent_requires_non_brand_lookup(
-            terms=terms,
-            brand_values=brand_values,
-        ):
-            for field in fields:
-                if brand_field is not None and field is brand_field:
-                    continue
-                emit_progress(
-                    "field_querying",
-                    f"正在查询{_field_attr(field, 'semantic_name') or _field_attr(field, 'field_name')}…",
-                )
-                values = self._load_field_values(
-                    table_name=_field_attr(field, "table_name"),
-                    field_name=_field_attr(field, "field_name"),
-                )
-                if not values:
-                    continue
-                process_field(field, values)
+        for field, values in field_values:
+            stage = "brand" if self._is_standard_brand_field(field) else "field"
+            emit_progress(
+                "brand" if stage == "brand" else "field_querying",
+                (
+                    "品牌标准字典已查询，候选已追加"
+                    if stage == "brand"
+                    else f"正在查询{_field_attr(field, 'semantic_name') or _field_attr(field, 'field_name')}…"
+                ),
+            )
+            process_field(field, values)
+            if stage != "brand":
                 emit_progress(
                     "field",
                     f"{_field_attr(field, 'semantic_name') or _field_attr(field, 'field_name')}已查询，结果已追加",
@@ -1655,22 +1658,10 @@ class FieldValueResolverService:
         fields: list[Any],
         intent: str,
     ) -> list[Any]:
-        brand_field = next(
-            (field for field in fields if self._is_standard_brand_field(field)),
-            None,
-        )
-        if brand_field is None or not str(intent or "").strip():
-            return fields
-        brand_values = self._load_field_values(
-            table_name=_field_attr(brand_field, "table_name"),
-            field_name=_field_attr(brand_field, "field_name"),
-        )
-        terms = self._extract_lookup_terms(str(intent or "").strip(), brand_values=brand_values)
-        if not self._intent_requires_non_brand_lookup(
-            terms=terms,
-            brand_values=brand_values,
-        ):
-            return [brand_field]
+        # Keep all controlled lookup fields in the context. Restricting the
+        # context to brand-only fields makes terms such as "T恤品类" look like
+        # structural wording and prevents category/fiber candidates from ever
+        # reaching the resolver or the SQL agent.
         return fields
 
     def _is_lookup_candidate_field(self, field: Any) -> bool:
@@ -1687,10 +1678,97 @@ class FieldValueResolverService:
             if "brand" in table_name and field_name in {"Name", "NameEn", "Alias"}:
                 return True
             return field_name == "Name" and any(hint in table_name for hint in LOOKUP_TABLE_HINTS_FOR_NAME)
+        # A scene dimension/filter is a controlled value by default. This
+        # makes new fields (size, season, gender, style, etc.) participate in
+        # the same resolver without requiring a code change for every field.
+        # High-cardinality free-text and numeric/time columns are excluded
+        # above through EXCLUDED_FIELD_NAMES and their scene roles.
         searchable = f"{semantic_name} {field_name} {table_name}".lower()
         if any(keyword in searchable for keyword in LOOKUP_SEMANTIC_KEYWORDS):
             return True
-        return field_name == "Name" and any(hint in table_name for hint in LOOKUP_TABLE_HINTS_FOR_NAME)
+        return True
+
+    def _field_resolution_mode(self, field: Any) -> str:
+        """Describe how a scene field should be interpreted by the resolver."""
+        role = _field_attr(field, "role").lower()
+        if self._is_lookup_candidate_field(field):
+            return "controlled"
+        if role == "time":
+            return "time"
+        if role == "metric":
+            return "numeric"
+        return "free_text"
+
+    def _augment_terms_from_field_values(
+        self,
+        intent: str,
+        terms: list[dict[str, str]],
+        field_values: list[tuple[Any, list[FieldValueCandidate]]],
+    ) -> list[dict[str, str]]:
+        """Add exact dictionary terms for every controlled non-brand field.
+
+        Brand aliases are already handled by the dedicated brand tokenizer. For
+        other controlled fields, matching the known canonical values directly is
+        both safer and more future-proof than trying to infer every phrase from
+        Chinese grammar (for example, extracting ``棉`` from ``棉纤维含量``).
+        """
+        normalized_intent = normalize_lookup_value(intent, drop_bracket_notes=False)
+        if not normalized_intent:
+            return terms
+        existing = {normalize_lookup_value(item.get("text")) for item in terms if item.get("text")}
+        additions: list[tuple[int, dict[str, str]]] = []
+        seen: set[str] = set(existing)
+        for field, values in field_values:
+            if self._is_standard_brand_field(field):
+                continue
+            if self._field_resolution_mode(field) != "controlled":
+                continue
+            semantic_name = _field_attr(field, "semantic_name")
+            for item in values:
+                candidate_key = normalize_lookup_value(item.value, drop_bracket_notes=False)
+                if not candidate_key or candidate_key in seen:
+                    continue
+                if len(candidate_key) < 2 and not self._allow_single_character_value(
+                    candidate_key,
+                    semantic_name,
+                ):
+                    continue
+                if not self._normalized_value_occurs(
+                    candidate_key,
+                    intent,
+                    normalized_intent,
+                ):
+                    continue
+                seen.add(candidate_key)
+                additions.append(
+                    (
+                        len(candidate_key),
+                        {"text": item.value, "source": "dictionary_exact"},
+                    )
+                )
+        additions.sort(key=lambda item: item[0], reverse=True)
+        return [*terms, *[item for _, item in additions[:32]]]
+
+    @staticmethod
+    def _allow_single_character_value(normalized_value: str, semantic_name: str) -> bool:
+        return len(normalized_value) == 1 and bool(
+            re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]", normalized_value)
+            and re.search(r"品牌|类目|品类|纤维|材质|颜色|功能|图案|肌理|工艺", semantic_name)
+        )
+
+    @staticmethod
+    def _normalized_value_occurs(candidate_key: str, intent: str, normalized_intent: str) -> bool:
+        if re.fullmatch(r"[a-z0-9]+", candidate_key, flags=re.IGNORECASE):
+            raw_key = normalize_lookup_value(intent, drop_bracket_notes=False)
+            if len(candidate_key) < 4:
+                return bool(
+                    re.search(
+                        rf"(?<![a-z0-9]){re.escape(candidate_key)}(?![a-z0-9])",
+                        raw_key,
+                        flags=re.IGNORECASE,
+                    )
+                )
+        return candidate_key in normalized_intent
 
     def _load_field_values(self, *, table_name: str, field_name: str) -> list[FieldValueCandidate]:
         table_key = str(table_name or "").strip()

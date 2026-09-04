@@ -300,3 +300,51 @@ def test_english_qualifier_still_matches_when_separated_by_space() -> None:
     terms = service._extract_lookup_terms("查询 Sample on 商品", brand_values=values)
 
     assert {"text": "Sample on", "source": "qualified_phrase"} in terms
+
+
+def test_analyze_intent_resolves_brand_category_and_fiber_together() -> None:
+    service = FieldValueResolverService()
+    fields = [
+        {"table_name": "dict_brand_info", "field_name": "Name", "semantic_name": "品牌", "role": "dimension"},
+        {"table_name": "clothing_info", "field_name": "SubCategory", "semantic_name": "二级类目", "role": "dimension"},
+        {"table_name": "dict_fiber_info", "field_name": "Name", "semantic_name": "标准纤维名称", "role": "dimension"},
+    ]
+    values_by_field = {
+        ("dict_brand_info", "Name"): [
+            FieldValueCandidate(value="优衣库（日本）", count=10, normalized="uniqlo日本"),
+        ],
+        ("clothing_info", "SubCategory"): [
+            FieldValueCandidate(value="T恤", count=20, normalized="t恤"),
+        ],
+        ("dict_fiber_info", "Name"): [
+            FieldValueCandidate(value="棉", count=30, normalized="棉"),
+        ],
+    }
+    service._load_field_values = lambda *, table_name, field_name: values_by_field.get((table_name, field_name), [])  # type: ignore[method-assign]
+
+    analysis = service.analyze_intent_values(
+        scene={"fields": fields},
+        queryable_fields=fields,
+        intent="uniqlo日本的所有T恤品类的棉纤维含量分布情况",
+    )
+
+    matches = {
+        (item["text"], match["semantic_name"], match["canonical_value"])
+        for item in analysis["terms"]
+        for match in item["matches"]
+    }
+    assert ("uniqlo日本", "品牌", "优衣库（日本）") in matches
+    assert ("T恤", "二级类目", "T恤") in matches
+    assert ("棉", "标准纤维名称", "棉") in matches
+
+    context = service.build_scene_value_context(
+        scene={"fields": fields},
+        queryable_fields=fields,
+        intent="uniqlo日本的所有T恤品类的棉纤维含量分布情况",
+    )
+    assert {item["semantic_name"] for item in context["fields"]} == {
+        "品牌",
+        "二级类目",
+        "标准纤维名称",
+    }
+    assert all(item["resolution_mode"] == "controlled" for item in context["fields"])

@@ -1017,27 +1017,44 @@ class FieldValueResolverService:
         # generic Chinese text is not blindly interpreted as a brand suffix.
         qualifiers = self._brand_qualifiers(brand_values or [])
         if qualifiers:
-            qualifier_pattern = "|".join(re.escape(item) for item in qualifiers)
             brand_token_pattern = (
                 r"(?:[A-Za-z][A-Za-z0-9._&'’/-]*(?:\s+[A-Za-z0-9._&'’/-]+){0,5}"
                 r"|[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]{2,32})"
             )
-            qualified_phrase_re = re.compile(
-                rf"(?P<brand>{brand_token_pattern})\s*"
-                rf"(?P<qualifier>{qualifier_pattern})"
-            )
             qualified_phrase_spans: list[tuple[int, int]] = []
-            for match in qualified_phrase_re.finditer(text_without_quotes):
-                raw_phrase = match.group(0)
-                base_text = match.group("brand")
-                base_key = normalize_lookup_value(base_text)
-                add(
-                    raw_phrase,
-                    "qualified_phrase",
-                    covers_base=True,
-                    base_key=base_key,
+            english_qualifiers = [item for item in qualifiers if self._is_english_qualifier(item)]
+            other_qualifiers = [item for item in qualifiers if not self._is_english_qualifier(item)]
+            qualified_patterns: list[re.Pattern[str]] = []
+            if other_qualifiers:
+                qualified_patterns.append(
+                    re.compile(
+                        rf"(?P<brand>{brand_token_pattern})\s*"
+                        rf"(?P<qualifier>{'|'.join(re.escape(item) for item in other_qualifiers)})"
+                    )
                 )
-                qualified_phrase_spans.append(match.span())
+            if english_qualifiers:
+                # A Latin qualifier must be separated from the brand. Without
+                # this boundary, a brand ending in "on" such as "lululemon"
+                # can be split into a fake "lululem" + "on" pair.
+                qualified_patterns.append(
+                    re.compile(
+                        rf"(?P<brand>{brand_token_pattern})\s+"
+                        rf"(?P<qualifier>{'|'.join(re.escape(item) for item in english_qualifiers)})",
+                        flags=re.IGNORECASE,
+                    )
+                )
+            for qualified_phrase_re in qualified_patterns:
+                for match in qualified_phrase_re.finditer(text_without_quotes):
+                    raw_phrase = match.group(0)
+                    base_text = match.group("brand")
+                    base_key = normalize_lookup_value(base_text)
+                    add(
+                        raw_phrase,
+                        "qualified_phrase",
+                        covers_base=True,
+                        base_key=base_key,
+                    )
+                    qualified_phrase_spans.append(match.span())
         else:
             qualified_phrase_spans = []
 
@@ -1092,10 +1109,18 @@ class FieldValueResolverService:
                     # meaningful shorthand. A one-character Latin prefix
                     # ("E" from "EU"), however, can split "THE NORTH FACE"
                     # into fake brand/qualifier fragments.
-                    if len(prefix) == 1 and not re.fullmatch(r"[\u3040-\u30ff\u3400-\u9fff]", prefix):
+                    if len(prefix) == 1 and not self._is_cjk_character(prefix):
                         continue
                     qualifiers.add(prefix)
         return sorted(qualifiers, key=lambda item: (len(item), item), reverse=True)
+
+    @staticmethod
+    def _is_english_qualifier(value: str) -> bool:
+        return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9._&'’/-]*", str(value or "").strip()))
+
+    @staticmethod
+    def _is_cjk_character(value: str) -> bool:
+        return bool(re.fullmatch(r"[\u3040-\u30ff\u3400-\u9fff]", str(value or "").strip()))
 
     def _brand_qualified_candidates(
         self,
@@ -1135,17 +1160,28 @@ class FieldValueResolverService:
                 for length in range(1, len(qualifier)):
                     prefix = qualifier[:length].strip()
                     prefix_key = normalize_lookup_value(prefix, drop_bracket_notes=False)
-                    if prefix_key and prefix_key not in seen_qualifiers:
+                    if (
+                        prefix_key
+                        and (len(prefix) != 1 or self._is_cjk_character(prefix))
+                        and prefix_key not in seen_qualifiers
+                    ):
                         seen_qualifiers.add(prefix_key)
                         qualifier_candidates.append((prefix, prefix_key))
 
         # The qualifier is normally a suffix of the lookup phrase:
         # "UNIQLO日本", "UNIQLO日", or "优衣库中国".
-        matching_qualifiers = [
-            item
-            for item in qualifier_candidates
-            if len(raw_key) > len(item[1]) and raw_key.endswith(item[1])
-        ]
+        normalized_raw_text = unicodedata.normalize("NFKC", raw_value).strip()
+        matching_qualifiers = []
+        for qualifier, qualifier_key in qualifier_candidates:
+            if len(raw_key) <= len(qualifier_key) or not raw_key.endswith(qualifier_key):
+                continue
+            if self._is_english_qualifier(qualifier) and not re.search(
+                rf"\s+{re.escape(qualifier)}\s*$",
+                normalized_raw_text,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            matching_qualifiers.append((qualifier, qualifier_key))
         if not matching_qualifiers:
             return []
         _, qualifier_key = max(matching_qualifiers, key=lambda item: len(item[1]))

@@ -269,3 +269,34 @@ def test_multiword_english_brand_is_not_split_by_single_letter_qualifier() -> No
     assert "E" not in qualifiers
     assert {"text": "THE NORTH FACE", "source": "phrase"} in terms
     assert all(item["text"] not in {"THE", "NOR", "FACE"} for item in terms)
+
+
+def test_english_qualifier_cannot_split_lululemon_brand_suffix() -> None:
+    service = FieldValueResolverService()
+    values = [
+        FieldValueCandidate(value="lululemon（中国）", count=10, normalized="lululemon"),
+        FieldValueCandidate(value="样例品牌（on）", count=1, normalized="sampleon"),
+    ]
+
+    terms = service._extract_lookup_terms("查询 lululemon 商品", brand_values=values)
+    typo_brand = service.resolve_field_value(
+        table_name="dict_brand_info",
+        field_name="Name",
+        raw_value="lululemo",
+        semantic_name="品牌",
+        candidate_values=values,
+    )
+
+    assert {"text": "lululemon", "source": "phrase"} in terms
+    assert all(item["source"] != "qualified_phrase" for item in terms if item["text"] == "lululemon")
+    assert typo_brand["canonical_value"] == "lululemon（中国）"
+    assert typo_brand["strategy"] == "fuzzy"
+
+
+def test_english_qualifier_still_matches_when_separated_by_space() -> None:
+    service = FieldValueResolverService()
+    values = [FieldValueCandidate(value="样例品牌（on）", count=1, normalized="sampleon")]
+
+    terms = service._extract_lookup_terms("查询 Sample on 商品", brand_values=values)
+
+    assert {"text": "Sample on", "source": "qualified_phrase"} in terms

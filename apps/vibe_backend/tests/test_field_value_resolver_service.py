@@ -421,3 +421,29 @@ def test_incremental_analysis_propagates_candidate_count_to_each_match() -> None
     matches = analysis["terms"][0]["matches"]
     assert matches
     assert all(match["candidate_count"] == 2 for match in matches)
+
+
+def test_analysis_reports_field_query_progress_while_loading_values() -> None:
+    service = FieldValueResolverService()
+    fields = [
+        {"table_name": "clothing_info", "field_name": "SubCategory", "semantic_name": "二级类目", "role": "dimension"},
+        {"table_name": "dict_fiber_info", "field_name": "Name", "semantic_name": "标准纤维名称", "role": "dimension"},
+    ]
+    values_by_field = {
+        ("clothing_info", "SubCategory"): [FieldValueCandidate(value="T恤", count=1, normalized="t恤")],
+        ("dict_fiber_info", "Name"): [FieldValueCandidate(value="棉", count=1, normalized="棉")],
+    }
+    service._load_field_values = lambda *, table_name, field_name: values_by_field.get((table_name, field_name), [])  # type: ignore[method-assign]
+    progress: list[dict] = []
+
+    service.analyze_intent_values(
+        scene={"fields": fields},
+        queryable_fields=fields,
+        intent="T恤棉",
+        progress_callback=progress.append,
+    )
+
+    messages = [str(item.get("message") or "") for item in progress]
+    assert any("正在查询二级类目" in message for message in messages)
+    assert any("正在查询标准纤维名称" in message for message in messages)
+    assert any("二级类目查询完成" in message for message in messages)

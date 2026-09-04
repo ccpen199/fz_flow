@@ -49,10 +49,10 @@ async def analyze_sql_intent(scene_id: str, body: AnalyzeSqlIntentRequest) -> di
     try:
         timeout_seconds = max(
             1.0,
-            float(os.getenv("FIELD_RESOLUTION_HTTP_TIMEOUT_SECONDS", "20")),
+            float(os.getenv("FIELD_RESOLUTION_HTTP_TIMEOUT_SECONDS", "60")),
         )
     except (TypeError, ValueError):
-        timeout_seconds = 20.0
+        timeout_seconds = 60.0
     try:
         analysis = await asyncio.wait_for(
             run_in_threadpool(
@@ -85,10 +85,10 @@ async def analyze_sql_intent_stream(scene_id: str, body: AnalyzeSqlIntentRequest
     try:
         timeout_seconds = max(
             1.0,
-            float(os.getenv("FIELD_RESOLUTION_HTTP_TIMEOUT_SECONDS", "20")),
+            float(os.getenv("FIELD_RESOLUTION_HTTP_TIMEOUT_SECONDS", "60")),
         )
     except (TypeError, ValueError):
-        timeout_seconds = 20.0
+        timeout_seconds = 60.0
 
     async def event_stream():
         queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()

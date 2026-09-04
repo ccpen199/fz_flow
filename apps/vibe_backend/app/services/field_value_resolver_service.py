@@ -5,6 +5,7 @@ import os
 import re
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from typing import Any, Callable
@@ -195,9 +196,16 @@ class FieldValueResolverService:
     @property
     def query_timeout_seconds(self) -> float:
         try:
-            return max(0.5, float(os.getenv("FIELD_VALUE_RESOLVER_QUERY_TIMEOUT_SECONDS", "8")))
+            return max(0.5, float(os.getenv("FIELD_VALUE_RESOLVER_QUERY_TIMEOUT_SECONDS", "20")))
         except (TypeError, ValueError):
-            return 8.0
+            return 20.0
+
+    @property
+    def query_worker_count(self) -> int:
+        try:
+            return max(1, min(12, int(os.getenv("FIELD_VALUE_RESOLVER_QUERY_WORKERS", "6"))))
+        except (TypeError, ValueError):
+            return 6
 
     def build_scene_value_context(
         self,
@@ -580,6 +588,14 @@ class FieldValueResolverService:
             if self._is_standard_brand_field(field)
         ]
         brand_field = brand_fields[0] if brand_fields else None
+        if brand_field is not None and progress_callback:
+            progress_callback(
+                {
+                    "stage": "brand_querying",
+                    "message": "正在查询品牌标准字典…",
+                    "analysis": {"intent": intent_text, "terms": []},
+                }
+            )
         brand_values = (
             self._load_field_values(
                 table_name=_field_attr(brand_field, "table_name"),
@@ -588,18 +604,59 @@ class FieldValueResolverService:
             if brand_field is not None
             else []
         )
+        if brand_field is not None and progress_callback:
+            progress_callback(
+                {
+                    "stage": "brand",
+                    "message": "品牌标准字典查询完成，正在查询其他字段…",
+                    "analysis": {"intent": intent_text, "terms": []},
+                }
+            )
         terms = self._extract_lookup_terms(intent_text, brand_values=brand_values)
         field_values: list[tuple[Any, list[FieldValueCandidate]]] = []
-        for field in fields:
-            if brand_field is not None and field is brand_field:
-                values = brand_values
-            else:
-                values = self._load_field_values(
-                    table_name=_field_attr(field, "table_name"),
-                    field_name=_field_attr(field, "field_name"),
+        non_brand_fields = [field for field in fields if brand_field is None or field is not brand_field]
+
+        def load_field_values(index: int, field: Any) -> tuple[int, Any, list[FieldValueCandidate]]:
+            semantic_name = _field_attr(field, "semantic_name") or _field_attr(field, "field_name")
+            if progress_callback:
+                progress_callback(
+                    {
+                        "stage": "field_querying",
+                        "message": f"正在查询{semantic_name}…",
+                        "analysis": {"intent": intent_text, "terms": []},
+                    }
                 )
+            values = self._load_field_values(
+                table_name=_field_attr(field, "table_name"),
+                field_name=_field_attr(field, "field_name"),
+            )
+            return index, field, values
+
+        loaded_fields: dict[int, tuple[Any, list[FieldValueCandidate]]] = {}
+        worker_count = min(self.query_worker_count, max(1, len(non_brand_fields)))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="field-values") as executor:
+            futures = {
+                executor.submit(load_field_values, index, field): index
+                for index, field in enumerate(non_brand_fields)
+            }
+            for future in as_completed(futures):
+                index, field, values = future.result()
+                loaded_fields[index] = (field, values)
+                semantic_name = _field_attr(field, "semantic_name") or _field_attr(field, "field_name")
+                if progress_callback:
+                    progress_callback(
+                        {
+                            "stage": "field",
+                            "message": f"{semantic_name}查询完成，结果已追加" if values else f"{semantic_name}未返回候选，继续查询…",
+                            "analysis": {"intent": intent_text, "terms": []},
+                        }
+                    )
+        for index in sorted(loaded_fields):
+            field, values = loaded_fields[index]
             if values:
                 field_values.append((field, values))
+        if brand_field is not None and brand_values:
+            field_values.insert(0, (brand_field, brand_values))
         terms = self._augment_terms_from_field_values(
             intent_text,
             terms,

@@ -336,21 +336,106 @@ class FieldValueResolverService:
         )
         return resolved.get("canonical_value") if resolved.get("resolved") else raw_value
 
+    def _declared_field_lookup(
+        self,
+        *,
+        scene: Any,
+        queryable_fields: list[Any] | None = None,
+        confirmed_values: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """语义名 → 场景里**第一个声明**它的可校验字段。
+
+        合并多套配置时，同一个语义可能挂到两列上（``品牌`` 既是
+        ``clothing_info.BrandName`` 又是 ``dict_brand_info.Name``）。判定"这个
+        字面值能不能命中标准值"必须落在**场景先声明的那一列**上：
+        ``conversation_service._brand_field`` 正是按这个顺序取字段、并按这一列
+        让用户确认的。两边规则不一致时，钉子钉在 A 列、闸门却去 B 列找，一条
+        合法 SQL 会被判成"标准值有歧义"。
+
+        2026-10-26 实测：会话加载 ``scene_0004 + scene_prd_price``（纤维 + 价格），
+        用户确认 ``zara``（clothing_info.BrandName，3489 条），SQL 也写的
+        ``ci.BrandName = 'zara'``，却被 ``dict_brand_info.Name`` 的
+        ``ZARA（中国）/ ZARA（淘宝）`` 拦下，图卡直接失败。
+
+        用**首次出现**（``setdefault``）而不是字典推导里的后者覆盖前者，是为了
+        和 ``_brand_field`` 保持同一个顺序口径；原实现用后者覆盖，等于让后加载
+        的那套配置改写前一套的语义。
+        """
+        allowed: set[tuple[str, str]] | None = None
+        if queryable_fields is not None:
+            allowed = {
+                (
+                    _field_attr(item, "table_name").lower(),
+                    _field_attr(item, "field_name").lower(),
+                )
+                for item in queryable_fields
+            }
+        lookup: dict[str, Any] = {}
+        by_key: dict[tuple[str, str], Any] = {}
+        for field in list(getattr(scene, "fields", []) or []):
+            if not getattr(field, "enabled", True):
+                continue
+            table_name = _field_attr(field, "table_name")
+            field_name = _field_attr(field, "field_name")
+            semantic_name = _field_attr(field, "semantic_name").strip().lower()
+            if not table_name or not field_name or not semantic_name:
+                continue
+            if allowed is not None and (table_name.lower(), field_name.lower()) not in allowed:
+                continue
+            # 原始品牌列（clothing_info.BrandName）被 _candidate_fields 排除了
+            # ——它确实不该参与"改写 SQL 字面量"，但**该**参与"这个字面值是否存在"
+            # 的判定：它的取值就是数据库里的真实值。否则配置里把品牌声明在原始列
+            # 的场景，品牌条件永远判不了。
+            if not (self._is_lookup_candidate_field(field) or self._is_raw_brand_field(field)):
+                continue
+            by_key[(table_name.lower(), field_name.lower())] = field
+            lookup.setdefault(semantic_name, field)
+
+        # 用户已经确认过的钉子**优先于声明顺序**：钉子钉在哪一列，就按哪一列判定。
+        # 「确认」是本系统里最强的口径信号（`sql_result_agent_service` 的注释写得很
+        # 清楚：人已经定过的字面量必须能过两道闸），不能因为合并配置换了先后顺序
+        # 就把钉子架空 —— 那会让用户"明明选过，却还被判歧义"。
+        for item in confirmed_values or []:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                str(item.get("table_name") or "").strip().lower(),
+                str(item.get("field_name") or "").strip().lower(),
+            )
+            pinned_field = by_key.get(key)
+            if pinned_field is None:
+                continue
+            semantic_name = str(item.get("semantic_name") or "").strip().lower() or (
+                _field_attr(pinned_field, "semantic_name").strip().lower()
+            )
+            if semantic_name:
+                lookup[semantic_name] = pinned_field
+        return lookup
+
     def find_unresolved_filter_conditions(
         self,
         *,
         filters: list[dict[str, Any]],
         scene: Any,
         queryable_fields: list[Any] | None = None,
+        confirmed_values: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
+        """Flag filter conditions whose spoken value has no single standard match.
+
+        ``confirmed_values`` carries the values a human already pinned (the
+        conversation's field-disambiguation card, or the config UI's picker).
+        A pinned literal is intentionally exempt from the ambiguity gate: the
+        whole point of the confirmation step is to settle the tie. Callers that
+        do not pass it keep the original, strictly-blocking behaviour.
+        """
         if not filters:
             return []
 
-        field_lookup = {
-            _field_attr(field, "semantic_name").strip().lower(): field
-            for field in self._candidate_fields(scene=scene, queryable_fields=queryable_fields)
-            if _field_attr(field, "semantic_name")
-        }
+        field_lookup = self._declared_field_lookup(
+            scene=scene,
+            queryable_fields=queryable_fields,
+            confirmed_values=confirmed_values,
+        )
         issues: list[dict[str, Any]] = []
         for condition in filters:
             if not isinstance(condition, dict):
@@ -369,7 +454,12 @@ class FieldValueResolverService:
             values = self._load_field_values(table_name=table_name, field_name=field_name)
             if not values:
                 continue
+            pinned = self._confirmed_canonical_values(
+                confirmed_values, table_name=table_name, field_name=field_name
+            )
             for raw_value in raw_values:
+                if str(raw_value or "").strip().lower() in pinned:
+                    continue
                 resolved = self.resolve_field_value(
                     table_name=table_name,
                     field_name=field_name,
@@ -388,14 +478,68 @@ class FieldValueResolverService:
                         "field_name": field_name,
                         "operator": operator,
                         "raw_value": raw_value,
-                        "candidate_values": [
-                            {"value": item.value, "count": item.count}
-                            for item in values[:8]
-                        ],
+                        "candidate_values": self._issue_candidates(
+                            resolved=resolved, fallback=values
+                        ),
                         "fuzzy_candidates": resolved.get("candidates", []),
                     }
                 )
         return issues
+
+    @staticmethod
+    def _issue_candidates(
+        *,
+        resolved: dict[str, Any],
+        fallback: list[Any],
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Candidates to show next to an issue: the ones the value actually hit.
+
+        Showing the dictionary's top-N instead produced messages like
+        "品牌 'THE NORTH FACE' 命中（候选：ZARA（中国）×4）", which is actively
+        misleading — those were simply the most common brands in the table.
+        """
+        fuzzy = resolved.get("candidates") if isinstance(resolved, dict) else None
+        candidates: list[dict[str, Any]] = []
+        if isinstance(fuzzy, list):
+            for item in fuzzy:
+                if not isinstance(item, dict):
+                    continue
+                value = str(item.get("value") or "").strip()
+                if value:
+                    candidates.append({"value": value, "count": int(item.get("count") or 0)})
+        if not candidates:
+            for item in fallback:
+                value = str(getattr(item, "value", "") or "").strip()
+                if value:
+                    candidates.append({"value": value, "count": int(getattr(item, "count", 0) or 0)})
+        return candidates[:limit]
+
+    @staticmethod
+    def _confirmed_canonical_values(
+        confirmed_values: list[dict[str, Any]] | None,
+        *,
+        table_name: str = "",
+        field_name: str = "",
+    ) -> set[str]:
+        """Lower-cased literals a human has already pinned for ``table.field``."""
+        pinned: set[str] = set()
+        if not confirmed_values:
+            return pinned
+        for item in confirmed_values:
+            if not isinstance(item, dict):
+                continue
+            item_table = str(item.get("table_name") or "").strip()
+            item_field = str(item.get("field_name") or "").strip()
+            if table_name and item_table and item_table != table_name:
+                continue
+            if field_name and item_field and item_field != field_name:
+                continue
+            for key in ("canonical_value", "term"):
+                value = str(item.get(key) or "").strip().lower()
+                if value:
+                    pinned.add(value)
+        return pinned
 
     def _filter_lookup_values(self, *, operator: str, value: Any) -> list[str]:
         if operator == "in" and isinstance(value, list):
@@ -504,6 +648,8 @@ class FieldValueResolverService:
                     score=1.0,
                     strategy=strategy,
                     alternatives=exact_matches,
+                    # 歧义只看"精确同名"的条数，含它名字的兄弟值不算（见 _resolved_payload）。
+                    exact_count=len(exact_value_matches),
                 )
 
         contains_matches = []
@@ -1360,7 +1506,14 @@ class FieldValueResolverService:
         scene: Any,
         queryable_fields: list[Any] | None = None,
         intent: str = "",
+        confirmed_values: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
+        """Block SQL whose controlled-field literals are not standard values.
+
+        ``confirmed_values`` (optional) lists literals a human has pinned; those
+        pass the ambiguity check. Omitting it preserves the strict behaviour
+        every existing caller relies on.
+        """
         sql_text = str(sql or "")
         if not sql_text.strip():
             return []
@@ -1388,6 +1541,7 @@ class FieldValueResolverService:
                     semantic_name=semantic_name,
                     candidate_values=values,
                     table_aliases=table_aliases,
+                    confirmed_values=confirmed_values,
                 )
             )
 
@@ -1404,7 +1558,11 @@ class FieldValueResolverService:
         semantic_name: str,
         candidate_values: list[FieldValueCandidate],
         table_aliases: set[str] | None = None,
+        confirmed_values: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
+        pinned = self._confirmed_canonical_values(
+            confirmed_values, table_name=table_name, field_name=field_name
+        )
         column_pattern = self._sql_column_pattern(field_name, table_aliases=table_aliases)
         comparison_re = re.compile(
             rf"(?P<column>(?<![\w`]){column_pattern})\s*"
@@ -1449,6 +1607,9 @@ class FieldValueResolverService:
             prefix, core, suffix = _literal_lookup_parts(raw_literal) if operator in {"LIKE", "NOT LIKE"} else ("", raw_literal, "")
             lookup_value = core.strip()
             if not lookup_value:
+                return None
+            if lookup_value.lower() in pinned:
+                # A human already settled this exact literal — do not re-litigate it.
                 return None
             resolved = self.resolve_field_value(
                 table_name=table_name,
@@ -1663,21 +1824,39 @@ class FieldValueResolverService:
             flags=re.IGNORECASE,
         )
         aliases: set[str] = set()
+        referenced = False
         for match in reference_re.finditer(str(sql or "")):
+            referenced = True
             alias = str(match.group("alias") or "").strip()
-            aliases.add(alias or table_key)
+            if alias:
+                aliases.add(alias)
+        if not referenced:
+            return set()
+        # A column can be referenced by alias, by bare table name, or fully
+        # qualified, so keep the table name itself matchable too.
+        aliases.add(table_key)
         return aliases
 
     def _sql_column_pattern(self, field_name: str, *, table_aliases: set[str] | None = None) -> str:
+        """Match a column reference only when it really belongs to this table.
+
+        The bare-column alternative is guarded so that ``dbi.Name`` can never be
+        read as an unqualified ``Name`` of another table. Without that guard a
+        literal compared against one controlled field (for example
+        ``dict_brand_info.Name``) is wrongly validated against every other
+        controlled field that happens to share the column name.
+        """
         quoted_field = re.escape(field_name)
-        if table_aliases:
-            qualifiers = "|".join(
+        qualifiers = (
+            "|".join(
                 rf"`?{re.escape(alias)}`?" for alias in sorted(table_aliases, key=len, reverse=True)
             )
-            table_or_alias = rf"(?:{qualifiers}\.)?"
-        else:
-            table_or_alias = r"(?:`?[A-Za-z_][A-Za-z0-9_]*`?\.)?"
-        return rf"{table_or_alias}`?{quoted_field}`?"
+            if table_aliases
+            else r"`?[A-Za-z_][A-Za-z0-9_]*`?"
+        )
+        qualified = rf"(?:{qualifiers})\s*\.\s*`?{quoted_field}`?"
+        bare = rf"(?<![\w`.])`?{quoted_field}`?"
+        return rf"(?:{qualified}|{bare})"
 
     def _candidate_fields(self, *, scene: Any, queryable_fields: list[Any] | None = None) -> list[Any]:
         raw_fields = queryable_fields if queryable_fields is not None else list(getattr(scene, "fields", []) or [])
@@ -2265,6 +2444,7 @@ class FieldValueResolverService:
         score: float,
         strategy: str,
         alternatives: list[FieldValueCandidate],
+        exact_count: int | None = None,
     ) -> dict[str, Any]:
         raw_value = str(base.get("raw_value") or "")
         canonical = candidate.value
@@ -2276,7 +2456,21 @@ class FieldValueResolverService:
                 continue
             seen_values.add(value_key)
             unique_candidates.append(item)
-        ambiguous = strategy in {"normalized_exact", "contains_candidate"} and len(unique_candidates) > 1
+        # 「精确同名优先」：用户说的词在标准词典里**存在同名的标准值**时，那就是答案，
+        # 不该再问。以前把"名字里含它的下位值"也计入候选数（羊毛 vs 回收羊毛 /
+        # 无割尾羊毛 / 美丽诺羊毛），于是「羊毛」被判成不明确 → 取数闸门拦下 SQL：
+        # `字段值有多个标准候选：标准纤维名称 '羊毛' 命中 dict_fiber_info.Name
+        # （候选：羊毛, 无割尾羊毛, 美丽诺羊毛, 回收羊毛）`。同理「T恤」被
+        # `T恤/Polo衫/背心` 连坐。
+        # 判据因此改成**只看精确同名的条数**：1 条 = 确定；多条（如标准品牌字典里的
+        # 优衣库（官网）/（日本）/（淘宝）/（中国））才是真歧义，才需要问。
+        # 相邻的下位值仍然原样列进 `candidates`，卡片上看得见，只是不再阻塞取数。
+        if strategy in {"normalized_exact", "normalized_exact_with_note"}:
+            ambiguous = (exact_count if exact_count is not None else len(unique_candidates)) > 1
+        elif strategy == "contains_candidate":
+            ambiguous = len(unique_candidates) > 1
+        else:
+            ambiguous = False
         return {
             **base,
             "canonical_value": canonical,

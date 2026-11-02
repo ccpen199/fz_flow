@@ -9,13 +9,6 @@ from typing import Any
 
 from packages.shared_contracts.python_models import QueryPlanDTO, QueryRunDTO, SessionStatus
 
-SCHEME_PREFIX = {
-    "presenton_ai": "Presenton AI",
-}
-
-BAR_FIRST_SCHEMES = set()
-
-
 def _field_label(value: object) -> str:
     if isinstance(value, dict):
         for key in ("semantic_name", "field", "name", "label", "field_name"):
@@ -141,8 +134,8 @@ def build_chart_spec(page_type: str, query_plan: QueryPlanDTO | None, query_run:
     }
 
 
-def _build_title(global_goal: str, page_type: str, query_plan: QueryPlanDTO | None, scheme: str) -> tuple[str, str]:
-    prefix = SCHEME_PREFIX.get(scheme, "汇报结论")
+def _build_title(global_goal: str, page_type: str, query_plan: QueryPlanDTO | None) -> tuple[str, str]:
+    prefix = "分析页面草稿"
     if page_type == "comparison":
         dims = " vs ".join(_field_label(item) for item in query_plan.dimensions[:2]) if query_plan else "多维对比"
         return f"{dims}对比分析", f"{prefix} 导出 · {global_goal}"
@@ -172,9 +165,8 @@ def _findings(query_run: QueryRunDTO | None, fallback: Sequence[str]) -> list[st
     return list(fallback)
 
 
-def _scheme_narrative(
+def _build_narrative(
     *,
-    scheme: str,
     global_goal: str,
     query_plan: QueryPlanDTO | None,
     query_run: QueryRunDTO | None,
@@ -194,40 +186,21 @@ def _scheme_narrative(
         label_col = next((col for col in profile.get("columns", []) if col != primary), primary)
         top_text = f"当前最高项：{first.get(label_col, '-')}, {primary}={_format_value(first.get(primary))}"
 
-    if scheme == "presenton_ai":
-        findings = [
-            base_findings[0] if base_findings else "本轮分析已整理为 AI PPT 生成输入。",
-            f"关键数据：{metric_line or '暂无可用统计'}",
-            f"来源链路：query={query_run.query_id if query_run else '-'}",
-        ]
-        narrative = (
-            f"本页围绕“{global_goal}”组织分析结果，作为 Presenton 大模型生成 PPT 的结构化输入。"
-            f" 当前结果字段包括 {columns_text}，导出阶段会把结论、数据预览和生成指令发送给 Presenton。"
-        )
-        recommendations = ["核对标题、结论和口径", "批准入 Deck 后调用 Presenton 生成 PPTX", "下载后检查版式与可编辑内容"]
-        return findings, narrative, recommendations
-
-    findings = base_findings[:3]
-    if not findings or findings == list(fallback):
-        fields = ", ".join(profile.get("columns", [])[:4]) or "暂无字段"
-        findings = [
-            f"围绕“{global_goal}”完成一轮数据分析。",
-            f"本次结果返回 {profile.get('rows_count', 0)} 行，主要字段包括 {fields}。",
-            "建议结合业务目标确认是否继续做品牌、平台或时间维度下钻。",
-        ]
+    findings = [
+        base_findings[0] if base_findings else "本轮分析已整理为可编辑页面草稿。",
+        f"关键数据：{metric_line or '暂无可用统计'}",
+        f"来源链路：query={query_run.query_id if query_run else '-'}",
+    ]
     narrative = (
-        f"本页面向管理汇报，围绕“{global_goal}”提炼核心结论。"
-        f" 当前结果来自 query {query_run.query_id if query_run else '-'}，"
-        f"建议以 {query_run.chart_suggestion if query_run else 'bar'} 图表达主结论。"
+        f"本页围绕“{global_goal}”组织分析结果，作为可编辑页面草稿。"
+        f" 当前结果字段包括 {columns_text}，写入 Deck 后可在 TrainPPTAgent 中继续排版和修改。"
     )
-    recommendations = ["确认主结论是否符合业务预期", "补充关键品牌/平台对比", "生成下一页原因分析或行动建议"]
+    recommendations = ["核对标题、结论和口径", "写入 Deck 后在 TrainPPTAgent 中编辑", "继续补充下一页分析或汇报结论"]
     return findings, narrative, recommendations
 
 
 def build_slide_content(
     *,
-    scheme: str,
-    scheme_name: str,
     global_goal: str,
     status: SessionStatus,
     query_plan: QueryPlanDTO | None,
@@ -236,20 +209,15 @@ def build_slide_content(
     profile = profile_query_result(query_run)
     fallback = _fallback_findings(status=status, query_plan=query_plan)
     page_type = _detect_page_type(query_plan=query_plan, query_run=query_run)
-    findings, narrative, recommendations = _scheme_narrative(
-        scheme=scheme,
+    findings, narrative, recommendations = _build_narrative(
         global_goal=global_goal,
         query_plan=query_plan,
         query_run=query_run,
         profile=profile,
         fallback=fallback,
     )
-    title, subtitle = _build_title(global_goal=global_goal, page_type=page_type, query_plan=query_plan, scheme=scheme)
+    title, subtitle = _build_title(global_goal=global_goal, page_type=page_type, query_plan=query_plan)
     chart_spec = build_chart_spec(page_type=page_type, query_plan=query_plan, query_run=query_run)
-    if scheme in BAR_FIRST_SCHEMES:
-        chart_spec["chart_type"] = "bar"
-    chart_spec["ppt_scheme"] = scheme
-    chart_spec["ppt_scheme_name"] = scheme_name
     return {
         "insight_service": "rule_based_v1",
         "profile": profile,

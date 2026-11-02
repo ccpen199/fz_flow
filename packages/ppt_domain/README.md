@@ -7,4 +7,4 @@
 - slide payload
 - deck aggregate
 - hitl review state
-- export request / artifact metadata
+- TrainPPTAgent handoff / callback metadata

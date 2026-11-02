@@ -32,10 +32,6 @@ tar -czf "$OUT_FILE" \
   --exclude="$ROOT_NAME/data/*tunnel*" \
   --exclude="$ROOT_NAME/runtime_data/logs" \
   --exclude="$ROOT_NAME/runtime_data/pids" \
-  --exclude="$ROOT_NAME/runtime_data/presenton/tmp" \
-  --exclude="$ROOT_NAME/runtime_data/presenton/app_data/userConfig.json" \
-  --exclude="$ROOT_NAME/runtime_data/presenton/app_data/*.db" \
-  --exclude="$ROOT_NAME/runtime_data/presenton/app_data/fastembed_cache" \
   --exclude="$ROOT_NAME/scripts/install_jdcloud_reverse_tunnel_launch_agent.sh" \
   --exclude="$ROOT_NAME/scripts/*remote*" \
   --exclude="$ROOT_NAME/scripts/*tunnel*" \
@@ -48,14 +44,6 @@ tar -czf "$OUT_FILE" \
   --exclude="$ROOT_NAME/deer-flow/frontend/.env" \
   --exclude="$ROOT_NAME/deer-flow/frontend/node_modules" \
   --exclude="$ROOT_NAME/deer-flow/frontend/.next" \
-  --exclude="$ROOT_NAME/third_party/presenton/.git" \
-  --exclude="$ROOT_NAME/third_party/presenton/.cache" \
-  --exclude="$ROOT_NAME/third_party/presenton/electron" \
-  --exclude="$ROOT_NAME/third_party/presenton/node_modules" \
-  --exclude="$ROOT_NAME/third_party/presenton/servers/fastapi/.venv" \
-  --exclude="$ROOT_NAME/third_party/presenton/servers/fastapi/fastembed_cache" \
-  --exclude="$ROOT_NAME/third_party/presenton/servers/nextjs/node_modules" \
-  --exclude="$ROOT_NAME/third_party/presenton/servers/nextjs/.next-build" \
   --exclude="*/__pycache__" \
   --exclude="*.pyc" \
   --exclude="*.log" \
@@ -73,8 +61,7 @@ Package keeps:
 - source code for Vibe backend/frontend
 - current SQL dump with scene config, preset questions, and saved SQL run history
 - docs and handoff instructions
-- runtime_data/artifacts and Presenton exports for customer display
-- third_party/presenton and deer-flow source without rebuildable dependencies
+- TrainPPTAgent handoff data and deer-flow source without rebuildable dependencies
 
 Package excludes:
 - .venv, node_modules, .next/.next-build

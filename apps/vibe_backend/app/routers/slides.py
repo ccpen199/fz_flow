@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..store import DECKS, QUERY_PLANS, QUERY_RUNS, SESSIONS, SLIDE_DRAFTS, persist_state
-from ..services.slide_service import build_slide_from_query, list_ppt_schemes, normalize_ppt_scheme
+from ..services.presentation_workflow_service import presentation_workflow_service
+from ..services.slide_service import build_slide_from_query
 from packages.shared_contracts.python_models import DeckDTO, SessionStatus, SlideDraftDTO
 
 router = APIRouter(prefix="/api/v1/analysis/sessions", tags=["slides"])
@@ -16,7 +17,6 @@ router = APIRouter(prefix="/api/v1/analysis/sessions", tags=["slides"])
 class RegenerateSlideRequest(BaseModel):
     style_hint: str = ""
     structure_hint: str = ""
-    scheme: str = "presenton_ai"
 
 
 class UpdateSlideRequest(BaseModel):
@@ -40,25 +40,13 @@ def _current_or_new_slide(session_id: str) -> SlideDraftDTO:
     return _ensure_slide(session_id)
 
 
-def _slide_scheme(slide: SlideDraftDTO | None) -> str:
-    if slide is None:
-        return "presenton_ai"
-    raw_scheme = str(
-        slide.lineage_summary.get("ppt_scheme")
-        or slide.chart_spec.get("ppt_scheme")
-        or ""
-    ).strip().lower()
-    return raw_scheme if raw_scheme else "presenton_ai"
-
-
-def _ensure_slide(session_id: str, *, scheme: str = "presenton_ai") -> SlideDraftDTO:
+def _ensure_slide(session_id: str) -> SlideDraftDTO:
     session = SESSIONS.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
-    scheme_key = normalize_ppt_scheme(scheme)
     slide = SLIDE_DRAFTS.get(session_id)
-    if slide is None or _slide_scheme(slide) != scheme_key:
+    if slide is None:
         query_plan = QUERY_PLANS.get(session_id)
         session_runs = [run for run in QUERY_RUNS.values() if run.session_id == session_id]
         slide = build_slide_from_query(
@@ -67,7 +55,6 @@ def _ensure_slide(session_id: str, *, scheme: str = "presenton_ai") -> SlideDraf
             status=session.status,
             query_plan=query_plan,
             query_run=session_runs[-1] if session_runs else None,
-            scheme=scheme_key,
         )
         _store_slide(session_id, slide)
         session.status = SessionStatus.WAITING_SLIDE_REVIEW
@@ -75,14 +62,9 @@ def _ensure_slide(session_id: str, *, scheme: str = "presenton_ai") -> SlideDraf
     return slide
 
 
-@router.get("/-/ppt-schemes", response_model=list[dict])
-async def get_ppt_schemes() -> list[dict]:
-    return list_ppt_schemes()
-
-
 @router.get("/{session_id}/current-slide", response_model=SlideDraftDTO)
-async def get_current_slide(session_id: str, scheme: str = Query(default="presenton_ai")) -> SlideDraftDTO:
-    return _ensure_slide(session_id, scheme=scheme)
+async def get_current_slide(session_id: str) -> SlideDraftDTO:
+    return _ensure_slide(session_id)
 
 
 @router.post("/{session_id}/current-slide/regenerate", response_model=SlideDraftDTO)
@@ -92,34 +74,81 @@ async def regenerate_current_slide(session_id: str, body: RegenerateSlideRequest
         raise HTTPException(status_code=404, detail="session not found")
     query_plan = QUERY_PLANS.get(session_id)
     session_runs = [run for run in QUERY_RUNS.values() if run.session_id == session_id]
-    scheme_key = normalize_ppt_scheme(body.scheme)
-    slide = build_slide_from_query(
+    current_slide = _current_or_new_slide(session_id)
+    generated_slide = build_slide_from_query(
         session_id=session_id,
         global_goal=session.global_goal,
         status=session.status,
         query_plan=query_plan,
         query_run=session_runs[-1] if session_runs else None,
-        scheme=scheme_key,
     )
     suffix = " / ".join([part for part in [body.style_hint, body.structure_hint] if part.strip()])
     if suffix:
-        slide.narrative = f"{slide.narrative} 已按要求重生成：{suffix}"
+        generated_slide.narrative = f"{generated_slide.narrative} 已按要求重生成：{suffix}"
     else:
-        slide.narrative = f"{slide.narrative} 已执行一次重生成。"
-    slide.status = "pending_review"
-    slide.version += 1
-    _store_slide(session_id, slide)
+        generated_slide.narrative = f"{generated_slide.narrative} 已执行一次重生成。"
+    patch = {
+        "title": generated_slide.title,
+        "subtitle": generated_slide.subtitle,
+        "chart_type": generated_slide.chart_spec.get("chart_type"),
+        "findings": generated_slide.findings,
+        "narrative": generated_slide.narrative,
+        "recommendations": generated_slide.recommendations,
+    }
+    deck = DECKS.get(session.deck_id) if session.deck_id else None
+    if deck is not None and current_slide.slide_id in deck.slide_ids:
+        changed, _ = presentation_workflow_service.apply_revision(
+            deck=deck,
+            target_slide_ids=[current_slide.slide_id],
+            patch=patch,
+            turn_id=None,
+            change_summary="从当前 SQL 结果重新生成页面",
+        )
+        slide = changed[0]
+        _store_slide(session_id, slide)
+        DECKS[deck.deck_id] = deck
+    else:
+        slide = presentation_workflow_service.clone_slide(current_slide, patch)
+        _store_slide(session_id, slide)
+        presentation_workflow_service.record_slide_revision(
+            slide=slide,
+            deck_id=None,
+            turn_id=None,
+            change_summary="从当前 SQL 结果重新生成页面",
+        )
     persist_state()
     return slide
 
 
 @router.patch("/{session_id}/current-slide", response_model=SlideDraftDTO)
 async def update_current_slide(session_id: str, body: UpdateSlideRequest) -> SlideDraftDTO:
-    slide = _current_or_new_slide(session_id)
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    source_slide = _current_or_new_slide(session_id)
     payload = body.model_dump(exclude_none=True)
-    for key, value in payload.items():
-        setattr(slide, key, value)
-    slide.version += 1
+    chart_spec = payload.pop("chart_spec", None)
+    if isinstance(chart_spec, dict) and isinstance(chart_spec.get("chart_type"), str):
+        payload["chart_type"] = chart_spec["chart_type"]
+    deck = DECKS.get(session.deck_id) if session.deck_id else None
+    if deck is not None and source_slide.slide_id in deck.slide_ids:
+        changed, _ = presentation_workflow_service.apply_revision(
+            deck=deck,
+            target_slide_ids=[source_slide.slide_id],
+            patch=payload,
+            turn_id=None,
+            change_summary="人工编辑当前页面",
+        )
+        slide = changed[0]
+        DECKS[deck.deck_id] = deck
+    else:
+        slide = presentation_workflow_service.clone_slide(source_slide, payload)
+        presentation_workflow_service.record_slide_revision(
+            slide=slide,
+            deck_id=None,
+            turn_id=None,
+            change_summary="人工编辑当前页面",
+        )
     _store_slide(session_id, slide)
     persist_state()
     return slide
@@ -146,19 +175,12 @@ async def approve_current_slide(session_id: str) -> DeckDTO:
             slide_ids=[],
             status="building",
         )
-    retained_slide_ids: list[str] = []
-    for slide_id in deck.slide_ids:
-        existing_slide = SLIDE_DRAFTS.get(slide_id)
-        if existing_slide is None:
-            continue
-        same_query = slide.query_id and existing_slide.query_id == slide.query_id
-        same_session_without_query = not slide.query_id and existing_slide.session_id == session_id
-        if same_query or same_session_without_query:
-            continue
-        retained_slide_ids.append(slide_id)
-    deck.slide_ids = retained_slide_ids
-    if slide.slide_id not in deck.slide_ids:
-        deck.slide_ids.append(slide.slide_id)
+    presentation_workflow_service.append_slide(
+        deck=deck,
+        slide=slide,
+        turn_id=None,
+        change_summary="人工确认页面并加入 Deck",
+    )
     DECKS[deck_id] = deck
     session.status = SessionStatus.UPDATING_DECK
     session.updated_at = datetime.now(UTC)

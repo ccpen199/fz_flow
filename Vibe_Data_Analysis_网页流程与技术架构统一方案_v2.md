@@ -223,7 +223,7 @@
 4. SQL 安全校验（只读、危险关键字拦截）  
 5. 查询数据库并返回结果  
 6. 生成洞察文本和下一步建议  
-7. 形成可导出报告页
+7. 形成可编辑报告页面草稿
 
 ## 11.2 当前边界
 
@@ -240,7 +240,7 @@
 
 1. 对话即报告：每轮有效分析自动生成一页  
 2. 会话绑定 deck：同一会话持续追加、可回看  
-3. 导出可编辑 `.pptx`：文本可编辑、结构可读  
+3. 在 TrainPPTAgent 中编辑页面：文本、结构和版式可继续调整
 4. 页面包含来源链路：表/SQL/关键指标可追溯  
 5. 模板策略分层：先统一基础模板，再做企业模板升级
 
@@ -250,8 +250,8 @@
 
 1. 每次 `/analyze` 产生 `slide` 对象  
 2. 会话内 `slides[]` 持续累积  
-3. `/export` 统一导出报告文件  
-4. 在线模式优先 `.pptx`，离线模式兜底 `.md`
+3. 批准入 Deck 后通过 handoff 交给 TrainPPTAgent 编辑
+4. 编辑器通过 callback 回写新的 DeckRevision
 
 ## 12.3 推荐的页面数据结构
 
@@ -276,14 +276,14 @@
 5. 风险与建议页（Risk & Action）  
 6. 总结页（Summary）
 
-## 12.5 导出验收标准
+## 12.5 编辑回写验收标准
 
-每次导出应自动检查：
+每次编辑回写应自动检查：
 
-1. 文件可打开  
-2. 文本可编辑（不是图片）  
-3. 页序与会话顺序一致  
-4. 每页有标题与关键结论  
+1. handoff 能加载当前 Deck
+2. 编辑内容能回写为新版本
+3. 页序与会话顺序一致
+4. 每页有标题与关键结论
 5. 每页可回溯 lineage
 
 ## 12.6 PPT 开源参考与取舍
@@ -320,22 +320,19 @@
 
 价值：可借鉴“规划-编辑-反思”的自动修订流程。
 
-### E. Presenton（端到端开源 AI PPT 参考）
+### E. TrainPPTAgent（当前编辑器）
 
-仓库：`presenton/presenton`  
-链接：https://github.com/presenton/presenton
-
-价值：  
-提供了从 AI 生成到模板化输出的一体化路径，可作为“独立 PPT 子系统”参考。
+定位：
+承接 fz_workflow 输出的 Deck handoff，在画布中完成页面排版和人工编辑，并通过 callback 回写版本。
 
 ## 12.7 选型建议（结合当前项目）
 
 当前实现调整：
 
-1. 继续保持结构化导出链路（当前已通）  
-2. PPT 模块收敛到 `presenton/presenton`，优先使用其 AI Presentation Generation API  
-3. `python-pptx` 仅作为 Presenton 不可用时的临时兜底  
-4. 后续模板和页面编辑优先沿 Presenton 的模板/编辑能力扩展
+1. 保持 `SlideDraft -> Deck -> DeckRevision` 的结构化页面链路
+2. PPT 编辑统一使用 TrainPPTAgent，不保留方案切换
+3. fz_workflow 不再提供本地 PPTX 导出和下载能力
+4. 后续模板和页面编辑沿 TrainPPTAgent 的 handoff/callback 协议扩展
 
 ---
 

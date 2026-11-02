@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from urllib import error, request
+
+from .model_registry import model_registry
 
 
 @dataclass
@@ -15,22 +16,28 @@ class SqlResultAgentConfig:
     timeout_seconds: int = 90
 
 
-SUPPORTED_HTTP_PROVIDERS = {"http", "modelscope"}
+SUPPORTED_HTTP_PROVIDERS = {"http", "modelscope", "deepseek"}
 
 
 class SqlResultAgentClient:
-    """LLM connector for SQL generation and optional plan metadata."""
+    """LLM connector for SQL generation and optional plan metadata.
 
-    def __init__(self) -> None:
-        self.config = self._build_config()
+    模型档位**不再在构造时快照**：每次 ``generate_plan()`` 都问一次
+    ``integrations.llm_agent.model_registry``（与配置中心推荐共用同一个开关）。
+    """
+
+    @property
+    def config(self) -> SqlResultAgentConfig:
+        return self._build_config()
 
     def _build_config(self) -> SqlResultAgentConfig:
+        resolved = model_registry.resolve()
         return SqlResultAgentConfig(
-            provider=(os.getenv("SQL_RESULT_AGENT_PROVIDER") or "http").strip().lower() or "http",
-            endpoint=(os.getenv("SQL_RESULT_AGENT_HTTP_ENDPOINT") or "").strip() or None,
-            api_key=(os.getenv("SQL_RESULT_AGENT_API_KEY") or "").strip() or None,
-            model=(os.getenv("SQL_RESULT_AGENT_HTTP_MODEL") or "gpt-5.2").strip() or "gpt-5.2",
-            timeout_seconds=int(os.getenv("SQL_RESULT_AGENT_HTTP_TIMEOUT", "90")),
+            provider=resolved.provider,
+            endpoint=resolved.endpoint or None,
+            api_key=resolved.api_key or None,
+            model=resolved.model or "gpt-5.2",
+            timeout_seconds=resolved.timeout_seconds,
         )
 
     def health(self) -> dict:
@@ -102,9 +109,18 @@ class SqlResultAgentClient:
             "The returned SQL must be directly executable by PyMySQL. Do not return placeholders or pseudo parameters, "
             "including :subcategory, :brand, ?, ${value}, <value>, to-be-confirmed, or values that require backend substitution. "
             "If a concrete filter value is missing, group by the relevant dimension or return empty sql with a clear risk_note. "
-            "For recent/latest/last-30-days business windows, anchor on the maximum available data date in the relevant "
-            "table, not CURRENT_DATE, CURDATE(), NOW(), or system time. Use MySQL syntax such as "
-            "DATE_SUB(anchor_date, INTERVAL 30 DAY), not PostgreSQL interval syntax. "
+            "If INPUT.time_scope is present, it is AUTHORITATIVE and overrides any date anchoring you would "
+            "derive yourself. It gives absolute boundaries already computed from the whole database: "
+            "scope.start and scope.end are inclusive dates, scope.anchor is the database-wide latest data date, "
+            "and scope.column is the date column to constrain. Write the time predicate on scope.column as "
+            "`>= 'start' AND <= 'end'` (or an exclusive upper bound of end + 1 day). Do NOT recompute the window "
+            "from MAX(date) over the filtered subset, do NOT wrap DATE_SUB around a MAX(...) anchor, do NOT use "
+            "scope.anchor in place of the given boundaries, and do NOT widen, narrow, or omit the range. "
+            "Both boundary dates must appear literally in the SQL even when the filter also references a brand "
+            "or category. "
+            "Only when INPUT.time_scope is absent: for recent/latest/last-30-days business windows, anchor on the "
+            "maximum available data date in the relevant table, not CURRENT_DATE, CURDATE(), NOW(), or system time. "
+            "Use MySQL syntax such as DATE_SUB(anchor_date, INTERVAL 30 DAY), not PostgreSQL interval syntax. "
             "When joining one-to-many extension tables, count SKUs with COUNT(DISTINCT clothing_info.Id) when SKU counts "
             "are required. "
             "If the question asks for product-level detail or candidate rows, do not aggregate unless the preset explicitly "

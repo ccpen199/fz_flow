@@ -77,11 +77,18 @@ class SqlResultAgentService:
         selected_preset = playbook_context.get("selected_preset")
         price_band_policy = playbook_context.get("price_band_policy") or {}
         field_disambiguation_context = self._field_disambiguation_context(context)
+        # A literal the user already confirmed must clear both safety gates.
+        # Without this the conversation would keep blocking on a tie the user
+        # has, in fact, already resolved.
+        confirmed_field_values = self._confirmed_field_resolutions(context)
         value_resolution_context = field_value_resolver_service.build_scene_value_context(
             scene=scene,
             queryable_fields=available,
             intent=intent,
         )
+        # 绝对时间窗抬到 payload 顶层：它必须比 `context` 里那一坨更容易被模型
+        # 当成硬约束读到（模型对 `INPUT.context.xxx` 的关注度远低于顶层字段）。
+        time_scope = self._time_scope(context)
         llm_payload = {
             "scene_id": scene.scene_id,
             "scene_name": scene.name,
@@ -91,6 +98,7 @@ class SqlResultAgentService:
             "semantic_fields": available,
             "relations": [item.model_dump(mode="json") for item in scene.relations],
             "context": context or {},
+            "time_scope": time_scope,
             "scene_playbook": playbook_context.get("scene_playbook"),
             "selected_preset": selected_preset,
             "price_band_policy": price_band_policy,
@@ -106,6 +114,9 @@ class SqlResultAgentService:
         )
         value_resolution_changes: list[dict[str, Any]] = []
         unresolved_filter_issues: list[dict[str, Any]] = []
+        explicit_filter_notes = self._merge_explicit_filters(query_plan=query_plan, context=context)
+        if query_plan is not None and explicit_filter_notes:
+            query_plan.risk_notes = [*query_plan.risk_notes, *explicit_filter_notes]
         if query_plan is not None:
             normalized_filters, filter_changes = field_value_resolver_service.normalize_filter_conditions(
                 filters=query_plan.filters,
@@ -123,6 +134,7 @@ class SqlResultAgentService:
                 filters=query_plan.filters,
                 scene=scene,
                 queryable_fields=available,
+                confirmed_values=confirmed_field_values,
             )
             if unresolved_filter_issues:
                 query_plan.risk_notes = [
@@ -171,6 +183,7 @@ class SqlResultAgentService:
                 scene=scene,
                 queryable_fields=available,
                 intent=intent,
+                confirmed_values=confirmed_field_values,
             )
             if controlled_sql_issues and query_plan is not None:
                 query_plan.risk_notes = [
@@ -184,6 +197,7 @@ class SqlResultAgentService:
                 plan=query_plan,
                 unresolved_filter_issues=unresolved_filter_issues,
                 controlled_sql_issues=controlled_sql_issues,
+                time_scope=time_scope,
             )
             if output_error:
                 query_run = self._failed_query_run(
@@ -1532,6 +1546,96 @@ class SqlResultAgentService:
             if item.enabled
         ]
 
+    def _merge_explicit_filters(
+        self,
+        *,
+        query_plan: QueryPlanDTO | None,
+        context: dict[str, Any] | None,
+    ) -> list[str]:
+        """把用户在对话里明确给出的筛选条件**权威并入**查询计划。
+
+        这些条件已经在对话层经过严格校验（字段必须命中场景里真实可查的语义字段，
+        运算符必须在支持集内），所以这里不再"看图猜"，而是直接并入：
+        用户说过的话优先于模型自己的推断。
+
+        并入之后：确定性的价格带 SQL 生成器会把它们写成 WHERE 子句；
+        走模型生成 SQL 的分支则靠同一条条件也被写进 intent 文本。
+
+        必须是**幂等**的——同一次取数的重试/参数抽屉重跑不能把同一条条件叠加两次。
+        """
+        if query_plan is None:
+            return []
+        raw = (context or {}).get("explicit_filters")
+        if not isinstance(raw, list) or not raw:
+            return []
+        existing = {
+            (
+                str(item.get("field") or "").strip().lower(),
+                str(item.get("operator") or item.get("op") or "=").strip().lower(),
+                str(item.get("value")),
+            )
+            for item in (query_plan.filters or [])
+            if isinstance(item, dict)
+        }
+        merged = list(query_plan.filters or [])
+        notes: list[str] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            field = str(item.get("field") or "").strip()
+            if not field:
+                continue
+            operator = str(item.get("operator") or "=").strip().lower()
+            key = (field.lower(), operator, str(item.get("value")))
+            if key in existing:
+                continue
+            existing.add(key)
+            merged.append({"field": field, "operator": operator, "value": item.get("value")})
+            notes.append(f"已按你给出的条件取数：{item.get('display') or field}")
+        if merged != list(query_plan.filters or []):
+            query_plan.filters = merged
+        return notes
+
+    @staticmethod
+    def _time_scope(context: dict[str, Any] | None) -> dict[str, Any] | None:
+        """从 context 里取出**结构化**的绝对时间窗（后端算好的事实）。"""
+        raw = (context or {}).get("time_scope")
+        if not isinstance(raw, dict):
+            return None
+        start = str(raw.get("start") or "").strip()
+        end = str(raw.get("end") or "").strip()
+        if not (_DATE_RE.fullmatch(start) and _DATE_RE.fullmatch(end)):
+            return None
+        return {**raw, "start": start, "end": end}
+
+    @staticmethod
+    def _time_scope_violation(sql: str, time_scope: dict[str, Any] | None) -> str:
+        """SQL 是否真的把时间窗固定在给定的两个边界上。
+
+        只做**可证伪**的判定（与 `filters_missing_from_sql` 同一原则）：
+        - 两个边界日期里任一个没在 SQL 里出现 → 没落到窗口，必定是错口径；
+        - 同时出现 `MAX(DATE(...))` + `DATE_SUB/DATE_ADD` → 它在自己回推窗口，
+          即便边界日期凑巧出现，锚点也不是我们要的那个。
+
+        上界允许 `end + 1 天`（半开区间 `>= start AND < end+1d` 是等价写法）。
+        """
+        if not isinstance(time_scope, dict):
+            return ""
+        start = str(time_scope.get("start") or "").strip()
+        end = str(time_scope.get("end") or "").strip()
+        if not (_DATE_RE.fullmatch(start) and _DATE_RE.fullmatch(end)):
+            return ""
+        text = str(sql or "")
+        if not text:
+            return ""
+        if not _date_literal_present(text, start):
+            return f"SQL 里没有时间窗起点 {start}"
+        if not _date_literal_present(text, end) and not _date_literal_present(text, _next_day(end)):
+            return f"SQL 里没有时间窗终点 {end}"
+        if _SELF_ANCHOR_WINDOW_RE.search(text):
+            return "SQL 仍在用 MAX(日期) 自己回推时间窗，而不是用给定的绝对区间"
+        return ""
+
     def _build_query_plan(
         self,
         *,
@@ -1696,19 +1800,21 @@ class SqlResultAgentService:
         plan: QueryPlanDTO | None,
         unresolved_filter_issues: list[dict[str, Any]] | None = None,
         controlled_sql_issues: list[dict[str, Any]] | None = None,
+        time_scope: dict[str, Any] | None = None,
     ) -> str:
         sql_text = str(sql or "").strip()
         if not sql_text:
             risk_notes = "; ".join(plan.risk_notes) if plan and plan.risk_notes else "LLM 未返回可执行 SQL。"
             return f"SQL Agent 未返回可执行 SQL：{risk_notes}"
         if unresolved_filter_issues:
-            notes = "；".join(self._unresolved_filter_notes(unresolved_filter_issues))
+            # 每条 note 自带句号，这里再拼一个就是"。。"（实测报障原文里就是双句号）。
+            notes = "；".join(self._unresolved_filter_notes(unresolved_filter_issues)).rstrip("。")
             return (
                 f"SQL Agent 生成了当前数据库无法命中的标准值过滤，已阻止执行：{notes}。"
                 "请确认字段值写法、先在字段筛选中选择已有标准值，或切换到包含该数据的数据源。"
             )
         if controlled_sql_issues:
-            notes = "；".join(self._controlled_sql_issue_notes(controlled_sql_issues))
+            notes = "；".join(self._controlled_sql_issue_notes(controlled_sql_issues)).rstrip("。")
             return (
                 f"SQL Agent 生成了不符合受控字段规则的过滤条件，已阻止执行：{notes}。"
                 "品牌、类目、材质、颜色、场景等标准值字段必须先解析为数据库标准值，并使用 = 或 IN 精确过滤。"
@@ -1717,6 +1823,16 @@ class SqlResultAgentService:
             return "SQL Agent 返回了未绑定占位符，已阻止执行。"
         if _NON_MYSQL_INTERVAL_RE.search(sql_text):
             return "SQL Agent 返回了非 MySQL 时间间隔语法，已阻止执行。"
+        scope_violation = self._time_scope_violation(sql_text, time_scope)
+        if scope_violation:
+            # 失败关闭：宁可不给图，也不能把「别的月份的数据」贴上「最近一个月」的标签。
+            # 用户 2026-10-19 报障的正是这个：SQL 自己按品牌最新日期回推，
+            # 条件栏却写着最近一个月。
+            return (
+                f"SQL Agent 没有遵守已确定的时间窗，已阻止执行：{scope_violation}。"
+                f"（要求：{'、'.join(str(time_scope.get(k) or '') for k in ('field', 'column') if time_scope.get(k))}"
+                f" 固定在 {time_scope.get('start')} ~ {time_scope.get('end')}）"
+            )
         if self._normalize_text(intent) and any(key in self._normalize_text(intent) for key in ("最近", "近30天", "近期")):
             if _SYSTEM_DATE_RE.search(sql_text):
                 return "SQL Agent 对“最近”使用了系统当前日期而非数据最大日期，已阻止执行。"
@@ -1767,3 +1883,31 @@ _UNBOUND_PLACEHOLDER_RE = re.compile(
 )
 _NON_MYSQL_INTERVAL_RE = re.compile(r"\bINTERVAL\s+'[^']+'", flags=re.IGNORECASE)
 _SYSTEM_DATE_RE = re.compile(r"\b(CURRENT_DATE|CURDATE\s*\(\s*\)|CURRENT_TIMESTAMP|NOW\s*\(\s*\))\b", flags=re.IGNORECASE)
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# 「MAX(DATE(...))」+「DATE_SUB(非字面量)」同时出现 = 模型在自己回推窗口
+# （实测失败 SQL：`WITH anchor AS (SELECT MAX(DATE(ci.CreateTime)) ...)` +
+# `DATE_SUB(a.max_create_date, INTERVAL 30 DAY)`）。
+# 只认 DATE_SUB 且参数不是日期字面量：正常写法
+# `CreateTime < DATE_ADD('2026-06-25', INTERVAL 1 DAY)` 不会被误伤。
+_SELF_ANCHOR_WINDOW_RE = re.compile(
+    r"MAX\s*\(\s*DATE\s*\(.{0,200}?DATE_SUB\s*\(\s*(?!['\d])",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
+def _next_day(value: str) -> str:
+    """`2026-06-25` → `2026-06-26`；解析不了就原样返回（退化成精确匹配）。"""
+    try:
+        from datetime import date, timedelta
+
+        year, month, day = (int(part) for part in value.split("-"))
+        return (date(year, month, day) + timedelta(days=1)).isoformat()
+    except Exception:  # noqa: BLE001
+        return value
+
+
+def _date_literal_present(sql: str, value: str) -> bool:
+    """该日期是否以**完整字面量**出现（`2026-06-25` 不能匹配 `2026-06-250`）。"""
+    if not value:
+        return False
+    return re.search(rf"(?<![\d-]){re.escape(value)}(?![\d-])", sql) is not None

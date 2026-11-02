@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass
 from urllib import error, request
 
+from .model_registry import model_registry
+
 
 CONFIG_CENTER_SYSTEM_PROMPT = """
 You are the configuration-center recommendation LLM for a database-backed data
@@ -79,42 +81,48 @@ class LlmAgentConfig:
     config_source: str = "SQL_RESULT_AGENT_*"
 
 
-SUPPORTED_HTTP_PROVIDERS = {"http", "modelscope"}
+SUPPORTED_HTTP_PROVIDERS = {"http", "modelscope", "deepseek"}
+
+
+def _uses_llm_agent_env() -> bool:
+    return any(
+        os.getenv(name)
+        for name in (
+            "LLM_AGENT_PROVIDER",
+            "LLM_AGENT_HTTP_ENDPOINT",
+            "LLM_AGENT_API_KEY",
+            "LLM_AGENT_HTTP_MODEL",
+            "LLM_AGENT_HTTP_TIMEOUT",
+        )
+    )
 
 
 class LlmAgentClient:
     """Configuration-center LLM connector.
 
-    Runtime model selection is intentionally shared with the SQL result agent:
-    SQL_RESULT_AGENT_HTTP_MODEL is the single model knob for this project.
+    模型档位**不再在构造时快照**：每次 ``recommend()`` 都问一次
+    ``integrations.llm_agent.model_registry``，于是前端切一次档，三处消费方
+    （配置中心推荐 / SQL 结果 / 画布意图）同时生效。
+    默认档 ``gpt-5.2`` 解析出的 provider/endpoint/model/key 与改造前逐字一致。
     """
 
-    def __init__(self) -> None:
-        self.config = self._build_config()
+    @property
+    def config(self) -> LlmAgentConfig:
+        return self._build_config()
 
     def _build_config(self) -> LlmAgentConfig:
-        uses_llm_agent_env = any(
-            os.getenv(name)
-            for name in (
-                "LLM_AGENT_PROVIDER",
-                "LLM_AGENT_HTTP_ENDPOINT",
-                "LLM_AGENT_API_KEY",
-                "LLM_AGENT_HTTP_MODEL",
-                "LLM_AGENT_HTTP_TIMEOUT",
-            )
-        )
-        provider = os.getenv("LLM_AGENT_PROVIDER") or os.getenv("SQL_RESULT_AGENT_PROVIDER") or "http"
-        endpoint = os.getenv("LLM_AGENT_HTTP_ENDPOINT") or os.getenv("SQL_RESULT_AGENT_HTTP_ENDPOINT") or ""
-        api_key = os.getenv("LLM_AGENT_API_KEY") or os.getenv("SQL_RESULT_AGENT_API_KEY") or ""
-        model = os.getenv("LLM_AGENT_HTTP_MODEL") or os.getenv("SQL_RESULT_AGENT_HTTP_MODEL") or "gpt-5.2"
-        timeout = os.getenv("LLM_AGENT_HTTP_TIMEOUT") or os.getenv("SQL_RESULT_AGENT_HTTP_TIMEOUT") or "90"
+        resolved = model_registry.resolve()
+        if resolved.id == "deepseek":
+            config_source = "DEEPSEEK_*"
+        else:
+            config_source = "LLM_AGENT_*" if _uses_llm_agent_env() else "SQL_RESULT_AGENT_*"
         return LlmAgentConfig(
-            provider=provider.strip().lower() or "http",
-            endpoint=endpoint.strip() or None,
-            api_key=api_key.strip() or None,
-            model=model.strip() or "gpt-5.2",
-            timeout_seconds=int(timeout),
-            config_source="LLM_AGENT_*" if uses_llm_agent_env else "SQL_RESULT_AGENT_*",
+            provider=resolved.provider,
+            endpoint=resolved.endpoint or None,
+            api_key=resolved.api_key or None,
+            model=resolved.model or "gpt-5.2",
+            timeout_seconds=resolved.timeout_seconds,
+            config_source=config_source,
         )
 
     def health(self) -> dict:
@@ -132,7 +140,7 @@ class LlmAgentClient:
         if self.config.provider not in SUPPORTED_HTTP_PROVIDERS:
             raise RuntimeError(
                 f"unsupported LLM agent provider={self.config.provider}; "
-                "this project runtime supports provider=http or provider=modelscope"
+                f"this project runtime supports provider in {sorted(SUPPORTED_HTTP_PROVIDERS)}"
             )
         if not self.config.endpoint:
             raise RuntimeError(f"{self.config.config_source.replace('*', 'HTTP_ENDPOINT')} is required for configuration recommendations")

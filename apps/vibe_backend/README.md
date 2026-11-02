@@ -23,8 +23,8 @@
 
 - 默认不保留运行测试数据（`VIBE_PERSIST_STATE=0`），仅内存态；如需落盘可设置 `VIBE_PERSIST_STATE=1`
 - 查询链路默认连接真实 MySQL（通过 `MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE` 配置）
-- 导出产物默认写入 `runtime_data/artifacts/`
-- `Deck export` 已生成真实 `.pptx` 文件，并附带 `json/md/html` sidecar
+- 汇报页面以 `SlideDraft`、`Deck` 和 `DeckRevision` 形式保存
+- 通过 TrainPPTAgent handoff 接口进入外部可编辑画布，编辑结果通过 callback 回写
 - DeerFlow bridge 已支持 thread 初始化、skills/memory 探测、chat turn 持久化
 - 可通过 `Scene -> Session -> Query -> Slide -> Deck -> Export` 走通完整链路
 - 已新增独立 `LLM-agent` 模块（不依赖 deepflow），支持 `recommend -> validate -> apply -> publish`（无服务端草稿持久化）

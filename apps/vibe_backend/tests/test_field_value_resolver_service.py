@@ -3,6 +3,7 @@ from app.services.field_value_resolver_service import (
     FieldValueResolverService,
     normalize_lookup_value,
 )
+from packages.shared_contracts.python_models import SceneDTO, SceneFieldDTO
 
 
 def _brand_candidates() -> list[FieldValueCandidate]:
@@ -142,7 +143,14 @@ def test_sql_table_aliases_keep_same_named_fields_in_their_own_table() -> None:
         JOIN dict_brand_info db ON db.Code = ci.BrandCode
     """
 
-    assert service._sql_table_aliases(sql=sql, table_name="dict_brand_info") == {"db"}
+    # 被引用过的表：别名 + 表名本身都能限定列（SQL 既可以写 db.Name，
+    # 也可以写不取别名的 dict_brand_info.Name）。
+    assert service._sql_table_aliases(sql=sql, table_name="dict_brand_info") == {
+        "db",
+        "dict_brand_info",
+    }
+    # 没出现在 FROM/JOIN 里的表：一个限定符都不给，避免它的同名列被拿去
+    # 校验别的表的字面量。
     assert service._sql_table_aliases(sql=sql, table_name="dict_fiber_info") == set()
 
 
@@ -352,6 +360,13 @@ def test_analyze_intent_resolves_brand_category_and_fiber_together() -> None:
 
 
 def test_non_brand_category_value_surfaces_exact_and_containing_candidates() -> None:
+    """精确同名 = 确定：兄弟值照旧列出来给人看，但不阻塞取数。
+
+    老行为把「T恤」判成 ambiguous，理由是旁边还有 `T恤/Polo衫/背心` 这个包含它的
+    下位值。实测后果是取数闸门拦下 SQL：`字段值有多个标准候选：二级类目 'T恤'
+    命中 clothing_info.SubCategory（候选：T恤, T恤/Polo衫/背心），请先在字段筛选中确认。`
+    —— 用户说的就是一个**标准值本身**，没有任何需要他决定的歧义。
+    """
     service = FieldValueResolverService()
     result = service.resolve_field_value(
         table_name="clothing_info",
@@ -366,12 +381,44 @@ def test_non_brand_category_value_surfaces_exact_and_containing_candidates() -> 
     )
 
     assert result["resolved"] is True
-    assert result["ambiguous"] is True
+    assert result["ambiguous"] is False
+    assert result["canonical_value"] == "T恤"
+    assert result["strategy"] == "normalized_exact"
     assert result["candidate_count"] == 2
     assert [item["value"] for item in result["candidates"]] == ["T恤", "T恤/Polo衫/背心"]
 
 
+def test_non_brand_field_with_two_exact_same_name_values_is_still_ambiguous() -> None:
+    """真的有多条**精确同名**（不同后缀备注归一到同一个键）时仍然要问。
+
+    判据收窄了，闸门没有失效：标准品牌字典里的
+    优衣库（官网）/（日本）/（淘宝）/（中国）就是这一形态。
+    """
+    service = FieldValueResolverService()
+    result = service.resolve_field_value(
+        table_name="clothing_info",
+        field_name="SubCategory",
+        raw_value="T恤",
+        semantic_name="二级类目",
+        candidate_values=[
+            FieldValueCandidate(value="T恤（男款）", count=4353, normalized="t恤"),
+            FieldValueCandidate(value="T恤（女款）", count=1200, normalized="t恤"),
+        ],
+    )
+
+    assert result["resolved"] is True
+    assert result["ambiguous"] is True
+    assert result["candidate_count"] == 2
+
+
 def test_non_brand_fiber_value_surfaces_all_matching_candidates_and_count() -> None:
+    """「棉」在标准纤维词典里有同名条目 → 确定，兄弟纤维照旧列出来。
+
+    真实报障（`conv_5152ebdb28`）就是「羊毛」：词典里 5 条含"羊毛"的值，其中
+    `羊毛 Code21` 是**精确同名**，其余是回收羊毛 / 无割尾羊毛 / 美丽诺羊毛。
+    老判据把它们混在一起计数 → ambiguous → `SQL Agent 生成了当前数据库无法命中的
+    标准值过滤 ... 候选：羊毛, 无割尾羊毛, 美丽诺羊毛, 回收羊毛`。
+    """
     service = FieldValueResolverService()
     fiber_values = [
         "BCI棉",
@@ -396,7 +443,9 @@ def test_non_brand_fiber_value_surfaces_all_matching_candidates_and_count() -> N
     )
 
     assert result["resolved"] is True
-    assert result["ambiguous"] is True
+    assert result["ambiguous"] is False
+    assert result["canonical_value"] == "棉"
+    assert result["strategy"] == "normalized_exact"
     assert result["candidate_count"] == len(fiber_values)
     assert {item["value"] for item in result["candidates"]} == set(fiber_values)
 
@@ -447,3 +496,173 @@ def test_analysis_reports_field_query_progress_while_loading_values() -> None:
     assert any("正在查询二级类目" in message for message in messages)
     assert any("正在查询标准纤维名称" in message for message in messages)
     assert any("二级类目查询完成" in message for message in messages)
+
+
+# ---------------------------------------------------------------- 同语义双列
+# 报障（2026-10-26）：会话里「ZARA + 近5个月纤维混纺」图卡直接失败——
+# 「SQL Agent 生成了当前数据库无法命中的标准值过滤：品牌 'zara' 命中
+#  dict_brand_info.Name（候选：ZARA（中国）, ZARA（淘宝））」。
+# 但用户已经在消歧卡上选过 `zara`，SQL 写的也是 `ci.BrandName = 'zara'`。
+# 根因：合并配置（纤维 + 价格）后「品牌」同时挂在 clothing_info.BrandName 和
+# dict_brand_info.Name 上；`_brand_field` 按声明顺序取前者让用户确认，判定闸门
+# 却按后者（原始品牌列被 `_candidate_fields` 排除，只剩字典列）判歧义。
+# 这些用例只用字段结构与候选值形态，不造业务数据。
+
+_RAW_BRAND_VALUES = [
+    FieldValueCandidate(value="zara", count=3489, normalized="zara"),
+    FieldValueCandidate(value="Zara", count=3121, normalized="zara"),
+    FieldValueCandidate(value="zarahome", count=108, normalized="zarahome"),
+]
+_DICT_BRAND_VALUES = [
+    FieldValueCandidate(value="ZARA（中国）", count=3772, normalized="zara"),
+    FieldValueCandidate(value="ZARA（淘宝）", count=4, normalized="zara"),
+]
+
+
+def _brand_merged_scene(*, raw_first: bool = True) -> SceneDTO:
+    raw = SceneFieldDTO(
+        field_id="f_brand_raw",
+        table_name="clothing_info",
+        field_name="BrandName",
+        semantic_name="品牌",
+        description="原始抓取品牌",
+        role="dimension",
+    )
+    standard = SceneFieldDTO(
+        field_id="f_brand_dict",
+        table_name="dict_brand_info",
+        field_name="Name",
+        semantic_name="品牌",
+        description="标准品牌字典",
+        role="dimension",
+    )
+    return SceneDTO(
+        scene_id="scene_merged_test",
+        name="纤维 + 价格",
+        description="合并配置",
+        fields=[raw, standard] if raw_first else [standard, raw],
+    )
+
+
+def _brand_dict_only_scene() -> SceneDTO:
+    return SceneDTO(
+        scene_id="scene_price_test",
+        name="价格",
+        description="只带标准品牌字典",
+        fields=[
+            SceneFieldDTO(
+                field_id="f_brand_dict",
+                table_name="dict_brand_info",
+                field_name="Name",
+                semantic_name="品牌",
+                description="标准品牌字典",
+                role="dimension",
+            )
+        ],
+    )
+
+
+def _service_with_brand_values(*, raw: bool = True, standard: bool = True) -> FieldValueResolverService:
+    service = FieldValueResolverService()
+    values_by_field = {}
+    if raw:
+        values_by_field[("clothing_info", "BrandName")] = _RAW_BRAND_VALUES
+    if standard:
+        values_by_field[("dict_brand_info", "Name")] = _DICT_BRAND_VALUES
+    service._load_field_values = lambda *, table_name, field_name: values_by_field.get(  # type: ignore[method-assign]
+        (table_name, field_name), []
+    )
+    return service
+
+
+def _raw_brand_pin() -> list[dict]:
+    return [
+        {
+            "term": "zara",
+            "semantic_name": "品牌",
+            "table_name": "clothing_info",
+            "field_name": "BrandName",
+            "canonical_value": "zara",
+        }
+    ]
+
+
+def test_confirmed_raw_brand_is_judged_on_its_own_column_not_the_dictionary() -> None:
+    """钉子钉在原始品牌列时，不能拿标准字典的候选去判它歧义。"""
+    service = _service_with_brand_values()
+
+    issues = service.find_unresolved_filter_conditions(
+        filters=[{"field": "品牌", "operator": "=", "value": "zara"}],
+        scene=_brand_merged_scene(),
+        confirmed_values=_raw_brand_pin(),
+    )
+
+    assert issues == []
+
+
+def test_merged_brand_semantic_follows_the_scene_declaration_order() -> None:
+    """没钉子的轮次仍然要拦：合并场景按**先声明**的列判定，报错指向真实那一列。"""
+    service = _service_with_brand_values()
+
+    issues = service.find_unresolved_filter_conditions(
+        filters=[{"field": "品牌", "operator": "=", "value": "zara"}],
+        scene=_brand_merged_scene(),
+    )
+
+    assert issues
+    assert issues[0]["type"] == "ambiguous_value"
+    assert (issues[0]["table_name"], issues[0]["field_name"]) == ("clothing_info", "BrandName")
+
+
+def test_confirmed_column_wins_even_when_it_is_declared_second() -> None:
+    """合并顺序反过来（字典先声明）时，钉子仍然决定去哪一列校验。"""
+    service = _service_with_brand_values()
+
+    issues = service.find_unresolved_filter_conditions(
+        filters=[{"field": "品牌", "operator": "=", "value": "zara"}],
+        scene=_brand_merged_scene(raw_first=False),
+        confirmed_values=_raw_brand_pin(),
+    )
+
+    assert issues == []
+
+
+def test_confirmed_value_that_is_absent_from_the_pinned_column_is_still_blocked() -> None:
+    """确认过不代表放行一切：字面量在被钉的那一列确实不存在，照样拦。"""
+    service = _service_with_brand_values()
+
+    issues = service.find_unresolved_filter_conditions(
+        filters=[{"field": "品牌", "operator": "=", "value": "ZARA（中国）"}],
+        scene=_brand_merged_scene(),
+        confirmed_values=_raw_brand_pin(),
+    )
+
+    assert issues
+    assert issues[0]["raw_value"] == "ZARA（中国）"
+    assert (issues[0]["table_name"], issues[0]["field_name"]) == ("clothing_info", "BrandName")
+
+
+def test_dictionary_only_scene_still_requires_a_decision() -> None:
+    """只有标准字典的配置（价格场景）不能被"确认过原始品牌"绕过。"""
+    service = _service_with_brand_values(raw=False)
+
+    blocked = service.find_unresolved_filter_conditions(
+        filters=[{"field": "品牌", "operator": "=", "value": "zara"}],
+        scene=_brand_dict_only_scene(),
+    )
+    confirmed = service.find_unresolved_filter_conditions(
+        filters=[{"field": "品牌", "operator": "=", "value": "ZARA（中国）"}],
+        scene=_brand_dict_only_scene(),
+        confirmed_values=[
+            {
+                "term": "ZARA",
+                "semantic_name": "品牌",
+                "table_name": "dict_brand_info",
+                "field_name": "Name",
+                "canonical_value": "ZARA（中国）",
+            }
+        ],
+    )
+
+    assert blocked and blocked[0]["table_name"] == "dict_brand_info"
+    assert confirmed == []

@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>新画布全链路功能流程图与功能点手册</title>
+<style>
+  :root{
+    --bg:#F4F5F7; --card:#FFFFFF; --line:#E3E6EA; --line2:#CFD4DA;
+    --tx:#1B1F24; --tx2:#5A6169; --tx3:#878E96;
+    --blue:#185FA5; --blue-bg:#E6F1FB; --blue-tx:#0C447C;
+    --amber:#854F0B; --amber-bg:#FAEEDA; --amber-tx:#633806;
+    --green:#0F6E56; --green-bg:#E1F5EE;
+    --red:#A32D2D; --red-bg:#FCEBEB;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 26px 90px}
+  h1{font-size:25px;font-weight:600;margin:0 0 8px;letter-spacing:-.3px}
+  h2{font-size:18px;font-weight:600;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line2)}
+  h3{font-size:15px;font-weight:600;margin:24px 0 10px}
+  p{margin:8px 0}
+  .sub{color:var(--tx2);font-size:13.5px;margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .pill{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line)}
+  .pill.warn{background:var(--amber-bg);border-color:#E0C48A;color:var(--amber-tx)}
+  .pill.ok{background:var(--green-bg);border-color:#9ED4C2;color:var(--green)}
+
+  .lane{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px 18px;margin-bottom:10px}
+  .lane-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .lane-tag{font:600 12px var(--mono);background:#EEF1F4;color:#41474E;padding:3px 9px;border-radius:6px}
+  .lane-title{font-size:14.5px;font-weight:600}
+  .lane-note{font-size:12px;color:var(--tx3)}
+
+  .nodes{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:12px}
+  .node{border:1px solid var(--line2);border-radius:10px;padding:12px 13px 13px;background:#FCFCFD;position:relative}
+  .node .id{font:600 11px var(--mono);color:var(--tx3);letter-spacing:.4px}
+  .node .name{font-size:13.5px;font-weight:600;margin:3px 0 5px;line-height:1.4}
+  .node .what{font-size:12.5px;color:var(--tx2)}
+  .node .ex{font-size:12px;margin-top:9px;padding-top:8px;border-top:1px dashed var(--line2);color:var(--blue-tx)}
+  .node .ex b{font-weight:600;color:var(--blue)}
+  .node .code{font:11px var(--mono);color:var(--tx3);margin-top:6px;word-break:break-all}
+  .node.cp{background:#FFFCF4;border-color:#E0BE7C}
+  .node.cp .ex{color:var(--amber-tx);border-top-color:#EBD9B4}
+  .node.cp .ex b{color:var(--amber)}
+  .node.art{background:#F6FBF9;border-color:#A9D6C6}
+  .node.bad{background:#FEF7F7;border-color:#E9BBBB}
+  .node.bad .ex{color:#7A2626}
+  .node.bad .ex b{color:var(--red)}
+
+  .flow{display:flex;flex-direction:column;align-items:center;gap:2px;margin:2px 0 8px}
+  .flow .bar{width:1.5px;height:16px;background:var(--line2)}
+  .flow .lbl{font-size:11.5px;color:var(--tx3);background:var(--bg);padding:0 8px}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13px;margin:10px 0}
+  th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#F7F8FA;font-weight:600;font-size:12.5px;color:#41474E;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td code,th code{font:12px var(--mono);background:#F1F3F5;padding:1px 5px;border-radius:4px}
+  .num{font:600 12.5px var(--mono)}
+  .hi{background:#FFF8E8}
+  .muted{color:var(--tx3)}
+  .scroll{overflow-x:auto}
+
+  pre{background:#1E2430;color:#E7EBF0;padding:14px 16px;border-radius:10px;overflow-x:auto;
+    font:12.5px/1.7 var(--mono);margin:10px 0}
+  pre .c{color:#8C97A8}
+  .k{color:#7FD1F5}
+  .s{color:#B8E6A0}
+
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:4px 0}
+  .callout{border-left:3px solid var(--blue);background:var(--blue-bg);padding:11px 14px;border-radius:0 8px 8px 0;margin:12px 0;font-size:13px}
+  .callout.warn{border-left-color:#C9952E;background:var(--amber-bg);color:var(--amber-tx)}
+  .callout.err{border-left-color:#C45454;background:var(--red-bg)}
+  footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line2);font-size:12px;color:var(--tx3)}
+  @media print{
+    body{background:#fff}
+    .lane,table,.node{break-inside:avoid}
+    h2{break-after:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>新画布（对话式分析智能体）全链路功能流程图</h1>
+<p class="sub">每个功能点：做什么 · 什么条件下触发 · 真实运行例子。数据取自 2026-09-14 当天在跑的实例与真实 MySQL 库。</p>
+<div class="meta">
+  <span class="pill">页面：<b>http://127.0.0.1:18901/agent.html</b></span>
+  <span class="pill">后端：127.0.0.1:18900</span>
+  <span class="pill ok">数据源：MySQL dataservice_test_local（64 张真实表）</span>
+  <span class="pill warn">新功能不允许用假数据</span>
+  <span class="pill warn">老功能流程不动（index.html 引 main.js，与新页面完全独立）</span>
+</div>
+
+<div class="callout">
+<b>怎么读这张图。</b>流程图分 7 层，每层里的方块是一个<b>功能点</b>，方块内三段：<span class="muted">这是谁</span> / 它做什么 / <b>真实例子</b>。
+<span class="muted">淡黄色方块</span>＝需要人拍板的关卡，<span class="muted">淡绿色方块</span>＝会往画布上落产物的写卡点，<span class="muted">淡红色方块</span>＝失败分支。
+每层的箭头标签写的是"上一层满足什么条件才走到这一层"。
+</div>
+
+<h2>一、全链路流程图</h2>
+
+<!-- L0 -->
+<div class="lane">
+  <div class="lane-head">
+    <span class="lane-tag">L0</span>
+    <span class="lane-title">入口层 · 会话与消息</span>
+    <span class="lane-note">前端 3 个文件：agent.html / agent.css / agent.js（无构建）</span>
+  </div>
+  <div class="nodes">
+    <div class="node">
+      <div class="id">F0.1</div>
+      <div class="name">创建会话</div>
+      <div class="what">第一次发消息时若还没有会话，自动建一个，记住 id 到 localStorage，刷新后能接着聊。</div>
+      <div class="ex"><b>例：</b>打开页面 → 输入框发第一句话 → 自动建出 <code>conv_96ed342a28</code>，标题「Zara 复盘会话」。</div>
+      <div class="code">POST /api/v1/conversations · agent.js:1085</div>
+    </div>
+    <div class="node">
+      <div class="id">F0.2</div>
+      <div class="name">发送消息 send()</div>
+      <div class="what">把文本（以及维度卡上点选出的 key 列表）发到后端，期间置忙、插入本地用户气泡，返回后刷新整个右栏。</div>
+      <div class="ex"><b>例：</b>点选「面料成分」+「价格带」→ 实际发送 <code>selected_dimension_keys:["fiber","price"]</code>，前端显示「看选中的维度」。</div>
+      <div class="code">POST /conversations/{id}/messages · agent.js:308</div>
+    </div>
+    <div class="node">
+      <div class="id">F0.3</div>
+      <div class="name">加载会话 / 画布</div>
+      <div class="what">打开页面时拉一次会话详情，同时拿回 messages 与 canvas，一次请求填满左右两栏。</div>
+      <div class="ex"><b>例：</b>打开 <code>conv_96ed342a28</code> 一次就拿到 12 条消息 + 5 个产物。</div>
+      <div class="code">GET /conversations/{id} · agent.js:1024</div>
+    </div>
+    <div class="node">
+      <div class="id">F0.4</div>
+      <div class="name">健康检查</div>
+      <div class="what">启动时探一次后端，不通用顶部状态条提示，避免用户对着白屏猜。</div>
+      <div class="ex"><b>例：</b>返回 <code>{"status":"ok","service":"vibe-backend"}</code>。</div>
+      <div class="code">GET /health · agent.js:1173</div>
+    </div>
+  </div>
+</div>
+
+<div class="flow"><div class="bar"></div><div class="lbl">每条消息都先过场景解析</div><div class="bar"></div></div>
+
+<!-- L1 -->
+<div class="lane">
+  <div class="lane-head">
+    <span class="lane-tag">L1</span>
+    <span class="lane-title">解析层 · 场景与字段语义</span>
+    <span class="lane-note">决定"这次用哪套字段口径"，是后面所有取数的前提</span>
+  </div>
+  <div class="nodes">
+    <div class="node">
+      <div class="id">F1.1</div>
+      <div class="name">场景解析 resolve_scene</div>
+      <div class="what">三级判定：<b>①</b> 显式传入 scene_id 直接取；<b>②</b> 按 <code>SCENE_ROUTING_HINTS</code> 5 组提示词打分（每命中一个词 +2，场景 sample_goals 命中再 +1），<b>平局取列表中最先出现的那个</b>；<b>③</b> 一个都没命中 → 用默认场景 <code>scene_prd_competitor</code>。锁定后写进会话并标 <code>auto</code>／<code>explicit</code>。<br><b>关键：只在"建会话"或"首条消息"时解析一次，之后整个会话沿用</b>（<code>handle_message</code> 仅在 <code>scene_id</code> 显式传入或会话还没场景时才重算）。</div>
+      <div class="ex"><b>例（实测）：</b>「最近想复盘一下 Zara，帮我分析看看」——5 组提示词<b>全部零命中</b>，走的是第 ③ 级<b>默认兜底</b>，落到 <code>scene_prd_competitor</code>；<b>不是</b>因为命中了「价格」「品牌」。<br>平局例子：「先看近 5 个月的纤维混纺和价格带」同时命中 competitor(价格)=2、price(价格带)=2、scene_0004(纤维)=2，<b>三组同分 → 取列表中最靠前的 competitor</b>。</div>
+      <div class="code">conversation_service.py:81 · 提示词表 :40 · 兜底 :103</div>
+    </div>
+    <div class="node">
+      <div class="id">F1.2</div>
+      <div class="name">无场景时明确失败</div>
+      <div class="what">一个场景都取不到时不猜、不硬跑，直接回一条可执行的提示。</div>
+      <div class="ex"><b>例：</b>返回「当前没有可用的场景配置。请先在配置中心创建或同步场景，再回来继续对话。」，intent=<code>unknown</code>。</div>
+      <div class="code">conversation_service.py:902</div>
+    </div>
+    <div class="node art">
+      <div class="id">F1.3</div>
+      <div class="name">维度资产 _ensure_dimension_options</div>
+      <div class="what">用场景里 enabled 的字段语义推荐切入点，最多 4 张、每张最多 6 个字段；已存在且品牌没变就直接复用，品牌换了就原地重建（不升版本）。</div>
+      <div class="ex"><b>例：</b>ZARA 建议出 4 个切入点——面料成分与纤维混纺 / 价格带与折扣节奏 / 品牌竞争格局 / 流行色彩矩阵。</div>
+      <div class="code">conversation_service.py:763 · dimension_recommender.py:165</div>
+    </div>
+    <div class="node">
+      <div class="id">F1.4</div>
+      <div class="name">时间窗与页数抽取</div>
+      <div class="what">从句子里正则抽时间窗（近/最近 N 天·周·月，及 20XX年X月）和页数；页数被夹在 2–12 页之间，防止"串个 100 页"。</div>
+      <div class="ex"><b>例：</b>「先看<b>近 5 个月</b>的纤维混纺和价格带，出图直观点」→ time_window=<code>近5个月</code>；「串个 <b>4 页</b>左右」→ page_count=4。</div>
+      <div class="code">dimension_recommender.py:282 · intent_router.py:160</div>
+    </div>
+  </div>
+</div>
+
+<div class="flow"><div class="bar"></div><div class="lbl">带着场景 + 维度资产进路由</div><div class="bar"></div></div>
+
+<!-- L2 -->
+<div class="lane">
+  <div class="lane-head">
+    <span class="lane-tag">L2</span>
+    <span class="lane-title">路由层 · 意图判定（DeepFlow agent）+ 槽位解析（IntentRouter）</span>
+    <span class="lane-note">2026-09-15 起：意图由 LLM 判定，纯规则只负责槽位</span>
+  </div>
+  <div class="nodes">
+    <div class="node">
+      <div class="id">F2.0</div>
+      <div class="name">意图判定改走 DeepFlow 多轮 agent <span style="opacity:.7">（2026-09-15 新增）</span></div>
+      <div class="what"><code>conversation_service._plan_turn_with_agent</code> 把「用户原话 + 场景 + 品牌记忆 + 画布已有维度 + 真实维度清单」交给 deer-flow 的 LangGraph agent <code>fz-canvas</code>（端口 2124，模型 <code>fz-gpt-5.2</code> 走内网网关），拿回严格 JSON：<code>intent / dimension_keys / time_window / page_count / reply / needs_clarification</code>。<br>后端三道校验：intent 不在白名单→<code>unknown</code>；<code>dimension_keys</code> 必须是真实维度 key，否则丢弃；解析失败→<code>unknown</code>+追问。<b>agent 不可用时如实报错，不退回关键词猜意图</b>（<code>VIBE_LLM_ROUTER=0</code> 可临时关闭）。</div>
+      <div class="ex"><b>例（真实接口实测）：</b>「你好」→ <code>chat</code>，0 卡 + 追问；「看看ZARA的价格带分布」→ <code>data_query</code>+<code>price</code> → 真实取数出图卡；「把已有图表串成一份4页汇报」→ <code>report_build</code>+<code>page_count=4</code> → 出大纲卡（1 页自动绑定真图）。</div>
+      <div class="code">conversation_service.py:_plan_turn_with_agent · services/deepflow_agent_service.py · docs/DeepFlow多轮对话接入_2026-09-15.md</div>
+    </div>
+    <div class="node">
+      <div class="id">F2.1</div>
+      <div class="name">关键词加权打分 <span style="opacity:.7">（现仅作槽位与补充证据）</span></div>
+      <div class="what">5 组词表共 88 个关键词，命中即计分：回退 ×3、汇报 ×3、改画布 ×2、取数 ×1、探索 ×1；点选维度或命中维度标题再 +4。<br><b>2026-09-15 起这份打分不再单独决定 intent</b>：它继续为品牌/页码/时间窗抽取提供证据，最终意图以 F2.0 的 LLM 判定为准。</div>
+      <div class="ex"><b>例（实测）：</b>「帮我串个 4 页左右的 PPT 汇报思路」→ 汇报类命中「串个」「ppt」「汇报」<b>3 个词</b> ×3 = <b>9 分</b>。<br><b>注意：</b>「4 页」不是汇报词（词表里是「几页」），它只被 <code>PAGE_COUNT_PATTERN</code> 抽成 <code>page_count=4</code>，不参与打分。<br><b>子串会重复计分</b>：「不要了」与「不要」同时命中同一句 → 改画布拿 4 分。</div>
+      <div class="code">intent_router.py:85（打分）· _hits :59</div>
+    </div>
+    <div class="node">
+      <div class="id">F2.2</div>
+      <div class="name">硬优先级裁决</div>
+      <div class="what">逐候选按固定顺序比较，<b>只有分数严格更大时才替换</b>（<code>if scores[c] &gt; best</code>），所以该顺序的<b>真实作用是"同分裁决"，压不过更高分</b>：回退 &gt; 汇报 &gt; 改画布 &gt; 取数 &gt; 探索。</div>
+      <div class="ex"><b>例（实测，与代码注释不一致）：</b>「色彩不要了，直接生成 PPT」→ 改画布 <b>4</b> 分（「不要了」＋「不要」两个词同时命中同一句，<b>被子串重复计分</b>）vs 汇报 <b>3</b> 分 → <b>改画布胜出</b>，走删页分支。<br>代码注释（<code>intent_router.py:18</code>）声称"build request must win"，但注释描述的场景在真实打分下不会发生 —— 这是<b>注释与行为不符的真实边界</b>，已记录待修（改动会改行为，未擅自改）。<br>平局例子：同得 3 分时按顺序取靠前的那个。</div>
+      <div class="code">intent_router.py:20（常量）· :100（裁决循环）</div>
+    </div>
+    <div class="node">
+      <div class="id">F2.3</div>
+      <div class="name">零命中不再决定意图（兜底早已移除）</div>
+      <div class="what">规则层零关键词命中时，<b>不再自行判定意图</b>：<code>intent_router.route</code> 仍返回 <code>INTENT_UNKNOWN</code> 作为"规则看不出"，但真正的意图以 <b>F2.0 的 LLM 判定</b>为准。<br>整个链路的守卫语义不变：<b>系统不确定时只能继续问，不能猜</b>——LLM 给不出有效判定、或 agent 不可用时，一律 <code>unknown</code> + 追问，<b>不出画布卡</b>。</div>
+      <div class="ex"><b>例（真实接口实测）：</b>「你好」→ LLM 判 <code>chat</code>、画布 <b>0 卡</b>、追问列出真实维度；「帮我看看数」→ LLM 判 <code>data_query</code> 但无有效维度 key → <b>不取数</b>，追问方向；停掉 2124 服务再发消息 → <code>unknown</code>+<code>failed</code>，文案「DeepFlow agent 服务（deer-flow 的 LangGraph）连不上，我没有替你猜意图」<span class="ts">（2026-10-07 修订：失败文案按<b>失败所在的那一层</b>分三种说法——服务连不上 / 服务通但没判定 / 其它，判据是失败现场探测 agent <code>/ok</code>，不再猜错误字符串，也不再一律写成"请确认 LangGraph 服务已启动"）</span>。</div>
+      <div class="code">intent_router.py 尾部 · conversation_service.py 的 agent 不可用分支</div>
+    </div>
+    <div class="node">
+      <div class="id">F2.4</div>
+      <div class="name">槽位抽取</div>
+      <div class="what">同时抽品牌（28 个种子品牌 + ASCII 词形，排除 ppt/sql/sku/top/ok/card）、页码（第 N 页 / 中文序数）、时间窗。</div>
+      <div class="ex"><b>例：</b>「The North Face 最近30天在各二级类目下的价格带分布」→ brand=<code>THE NORTH FACE</code>，time_window=<code>近30天</code>。</div>
+      <div class="code">intent_router.py:146 / :171</div>
+    </div>
+    <div class="node">
+      <div class="id">F2.5</div>
+      <div class="name">品牌记忆</div>
+      <div class="what">本轮没提到品牌就沿用工作记忆里的品牌，避免用户每轮都要重复说一遍。</div>
+      <div class="ex"><b>例：</b>第 1 轮锁定 ZARA 后，第 6 轮只说「价格带再看一眼」，仍按 ZARA 取数。</div>
+      <div class="code">conversation_service.py:928</div>
+    </div>
+  </div>
+</div>
+
+<div class="flow"><div class="bar"></div><div class="lbl">按 intent 走 5 个分支之一</div><div class="bar"></div></div>
+
+<!-- L3 -->
+<div class="lane">
+  <div class="lane-head">
+    <span class="lane-tag">L3</span>
+    <span class="lane-title">分派层 · handle_message 的 5 个分支</span>
+    <span class="lane-note">每个分支有自己的处理器与产物类型</span>
+  </div>
+  <div class="nodes">
+    <div class="node art">
+      <div class="id">F3.1</div>
+      <div class="name">explore → _handle_explore</div>
+      <div class="what">不取数，只把切入点落成一张维度卡，让用户点选。文案由 canvas_orchestrator.plan_explore 生成。</div>
+      <div class="ex"><b>例：</b>产物 <code>art_9128a56dd2</code>「ZARA分析切入点」，副标题「基于 竞品与价格分析 的字段资产推荐」。</div>
+      <div class="code">conversation_service.py:968 · canvas_orchestrator.py:15</div>
+    </div>
+    <div class="node art">
+      <div class="id">F3.2</div>
+      <div class="name">data_query → _handle_data_query</div>
+      <div class="what">取数主分支。先做品牌消歧（关卡①），通过后进执行层，每个维度落一张图表卡。</div>
+      <div class="ex"><b>例：</b>「先看近 5 个月的纤维混纺和价格带，出图直观点」→ 落 2 张图表卡（37 行 / 29 行）。</div>
+      <div class="code">conversation_service.py:987</div>
+    </div>
+    <div class="node art">
+      <div class="id">F3.3</div>
+      <div class="name">report_build → _handle_report_build</div>
+      <div class="what">按页数生成大纲，已出图的维度自动绑到对应页上；不重复取数，只引用已有产物 id。</div>
+      <div class="ex"><b>例：</b>产物 <code>art_563ef46b49</code>「ZARA汇报大纲」，4 页、其中 <b>2 页自动绑定</b>（Page2→纤维图、Page3→价格带图）。</div>
+      <div class="code">conversation_service.py:1594</div>
+    </div>
+    <div class="node art">
+      <div class="id">F3.4</div>
+      <div class="name">canvas_revision → _handle_revision</div>
+      <div class="what">改大纲：按维度删页（连带移除对应图表）、按页码换页；句子里有「生成/ppt」时顺手编译出 PPT。</div>
+      <div class="ex"><b>例：</b>「色彩不要了」→ 移除色彩对应图与页；当前大纲没有色彩页时会明确回一句「因此没有删除任何页面」。</div>
+      <div class="code">conversation_service.py:1613 · report_composer</div>
+    </div>
+    <div class="node">
+      <div class="id">F3.5</div>
+      <div class="name">rollback → _handle_rollback</div>
+      <div class="what">从最近一个带历史的产物回退一版；确实没有历史时如实说"没有可回退的版本"，不假装成功。</div>
+      <div class="ex"><b>例：</b>第 7 轮说「回退一下」时两张图卡都还是 v=1（重取发生在第 10/12 轮）→ 回复「当前没有可回退的历史版本」。<b>判定正确。</b></div>
+      <div class="code">conversation_service.py:1683 → :331</div>
+    </div>
+  </div>
+</div>
+
+<div class="flow"><div class="bar"></div><div class="lbl">只有 data_query 这一支进入执行层</div><div class="bar"></div></div>
+
+<!-- L4 -->
+<div class="lane">
+  <div class="lane-head">
+    <span class="lane-tag">L4</span>
+    <span class="lane-title">执行层 · data_query 内部（三道人工关卡的前两道在这里）</span>
+    <span class="lane-note">所有路径（首次 / 消歧后 / 澄清后 / 抽屉后）都汇到 _execute_goals 这一个漏斗</span>
+  </div>
+  <div class="nodes">
+    <div class="node">
+      <div class="id">F4.1</div>
+      <div class="name">品牌归一 resolve_brand</div>
+      <div class="what">拿口语品牌名去标准字典解析，候选按「分数、记录数」排序去重。这是消歧判定的数据源。</div>
+      <div class="ex"><b>例：</b>输入「THE NORTH FACE」→ 解析出 7 个候选：325 / 185 / 86 / 62 / 29 / 5 / 0。</div>
+      <div class="code">conversation_service.py:352</div>
+    </div>
+    <div class="node cp">
+      <div class="id">F4.2</div>
+      <div class="name">关卡① 字段消歧 _ask_field_resolution</div>
+      <div class="what">候选不占优势就<b>落卡且不发 SQL</b>，并把 pending_blocker 记到工作记忆；用户选过的值写进 confirmed_field_values，之后永不重复问。</div>
+      <div class="ex"><b>例：</b>产物 <code>art_fb2770b1f8</code>「品牌「THE NORTH FACE」需要确认」；候选 325 vs 185，325 &lt; 185×3 → <b>落卡，0 条 SQL</b>。</div>
+      <div class="code">conversation_service.py:1271 · 判定 :462</div>
+    </div>
+    <div class="node">
+      <div class="id">F4.3</div>
+      <div class="name">目标编排 plan_data_query</div>
+      <div class="what">把选中的维度翻译成 goal：一句话意图 + 图表建议 + 指标 + 维度。品牌与时间窗拼进 goal 文本。</div>
+      <div class="ex"><b>例：</b><code>{dimension_key:"price", goal:"ZARA 各二级类目的价格分布情况（近5个月）", chart_hint:"histogram"}</code>。</div>
+      <div class="code">canvas_orchestrator.py:42</div>
+    </div>
+    <div class="node">
+      <div class="id">F4.4</div>
+      <div class="name">并行取数 _run_goals</div>
+      <div class="what">线程池并发跑 goal，并发上限 3；单维度异常被捕获成一条失败结果，不会拖垮其它维度。</div>
+      <div class="ex"><b>例：</b>一次请求里 2 个维度同时跑，两块图卡同时出现。</div>
+      <div class="code">conversation_service.py:668 · 上限 :47</div>
+    </div>
+    <div class="node">
+      <div class="id">F4.5</div>
+      <div class="name">单维度取数 _run_goal</div>
+      <div class="what">调 SQL Agent。把已确认的标准值塞进 <code>context.field_resolution.confirmed_resolutions</code>，澄清回答拼进意图文本，抽屉参数折进 <code>price_band_policy</code>。</div>
+      <div class="ex"><b>例：</b>确认品牌后，下一轮请求里带上 <code>confirmed_resolutions:[{table_name:"dict_brand_info", field_name:"Name", canonical_value:"THE NORTH FACE"}]</code>。</div>
+      <div class="code">conversation_service.py:549</div>
+    </div>
+    <div class="node">
+      <div class="id">F4.6</div>
+      <div class="name">两道 SQL 安全闸门</div>
+      <div class="what">闸门 A 查 filters 里的未解析字段值；闸门 B 查已生成 SQL 里的 <code>列 = '字面量'</code>。人工钉过的值通过 <code>confirmed_values</code> 直接放行。</div>
+      <div class="ex"><b>例：</b>这正是之前 TNF 全维度失败的根因——闸门只认配置页钉的值，不认对话里选的值。现在参数可选，旧调用方不传则行为一字不变。</div>
+      <div class="code">field_value_resolver_service.py · sql_result_agent_service.py</div>
+    </div>
+    <div class="node">
+      <div class="id">F4.7</div>
+      <div class="name">规格与结论 chart_spec_service</div>
+      <div class="what">把查询结果转成渲染无关的图表规格（列、行、图型、findings），再生成一句中文结论。图表类型按字段语义自动判。</div>
+      <div class="ex"><b>例：</b>纤维混纺 → 5 列 / 37 行 / <code>chart_type=area</code>；结论「有机棉 在纤维占比_合计上累计占比最高，约 53.4%」。</div>
+      <div class="code">chart_spec_service.py:56 / :248</div>
+    </div>
+    <div class="node cp">
+      <div class="id">F4.8</div>
+      <div class="name">关卡② 口径澄清 _ask_clarification</div>
+      <div class="what">两类触发：SQL 跑通但 0 行（empty_result），或报错命中 6 个标记之一。选项从报错文本里正则反挖，永远带自由输入框兜底。</div>
+      <div class="ex"><b>例：</b>产物 <code>art_23480b030c</code>「品牌竞争格局」reason=<code>empty_result</code>，选项「不限时间（看全部可用数据）」→ 点它后出 <b>38 行</b>。</div>
+      <div class="code">conversation_service.py:1326 · 分类 :1186</div>
+    </div>
+    <div class="node bad">
+      <div class="id">F4.9</div>
+      <div class="name">真失败 → 失败图表卡</div>
+      <div class="what">既不是问口径、也不是空结果，才落失败卡；卡片正面放摘要，折叠区放驱动真实报错。泛化错误文本会被换成更具体的诊断。</div>
+      <div class="ex"><b>例：</b>泛化文案 <code>MySQL 查询执行失败。</code> 会被替换成驱动真实信息（如 <code>Unknown column 'bucketed.raw_width'</code>）。</div>
+      <div class="code">conversation_service.py:1094 · :605</div>
+    </div>
+  </div>
+</div>
+
+<div class="flow"><div class="bar"></div><div class="lbl">每个维度的结果 → 一张卡</div><div class="bar"></div></div>
+
+<!-- L5 -->
+<div class="lane">
+  <div class="lane-head">
+    <span class="lane-tag">L5</span>
+    <span class="lane-title">落卡层 · 画布产物的生命周期（关卡③在这里）</span>
+    <span class="lane-note">产物是"有身份的卡"，不是一段 HTML</span>
+  </div>
+  <div class="nodes">
+    <div class="node art">
+      <div class="id">F5.1</div>
+      <div class="name">按 dedupe_key 覆盖写卡</div>
+      <div class="what">同一个维度 key 永远只对应一张卡：命中就覆盖内容并升版本、旧版压进 history；没有就新建。所以画布不会越聊越长。</div>
+      <div class="ex"><b>例：</b><code>art_73581d7d71</code>（价格带）在第 2、5、6 轮反复取数后 version=3，而画布始终只有 1 张价格带卡。</div>
+      <div class="code">conversation_service.py:204</div>
+    </div>
+    <div class="node art">
+      <div class="id">F5.2</div>
+      <div class="name">成功取代待确认</div>
+      <div class="what">某维度取数成功后，主动移除它的待澄清卡，避免画布上留下一张已经没用的问句。</div>
+      <div class="ex"><b>例：</b>价格带维度成功后，按 key <code>clarify:price</code> 删掉对应澄清卡。</div>
+      <div class="code">conversation_service.py:1121 · :279</div>
+    </div>
+    <div class="node cp">
+      <div class="id">F5.3</div>
+      <div class="name">关卡③ 参数抽屉 _apply_requery</div>
+      <div class="what">图表卡上点「高级参数」改完重跑：白名单只认价格带 4 项 + mode，畸形 payload 改不动别的东西；复用同一 goal，覆盖同一张卡。</div>
+      <div class="ex"><b>例：</b>ZARA 价格带 → 分位数 + 6 个桶 → 覆盖同一张卡，version 2→3；回复里带一句「价格带 分位数、6 个桶、时间窗口 不限」。</div>
+      <div class="code">conversation_service.py:1540 · 白名单 :648</div>
+    </div>
+    <div class="node art">
+      <div class="id">F5.4</div>
+      <div class="name">确认 / 澄清回写 apply_artifact_action</div>
+      <div class="what">画布上的所有人工动作走同一个入口，按卡型分派：确认卡→写 confirmed_field_values 并重新取数；澄清卡→写 clarifications 并重新取数（选项可携带新时间窗）。</div>
+      <div class="ex"><b>例：</b>选「不限时间」不是只改文案——该选项自带 <code>time_window:""</code>，会真的把时间窗放开后重跑。</div>
+      <div class="code">POST …/artifacts/{id}/resolve · :1377 / :1410 / :1486</div>
+    </div>
+    <div class="node">
+      <div class="id">F5.5</div>
+      <div class="name">改内容 revise / 回退 rollback</div>
+      <div class="what">revise 改卡内内容（标题、图型、换绑页）；rollback 从 history 恢复上一版；rollback_latest 回退全局最近的那张。</div>
+      <div class="ex"><b>例：</b>PPT 页卡片上「换成柱线图」走 revise，只改这一页的 chart_type，不重新取数。</div>
+      <div class="code">:285 / :317 / :331 · PATCH & POST 路由</div>
+    </div>
+    <div class="node art">
+      <div class="id">F5.6</div>
+      <div class="name">PPT 装配 compile_deck</div>
+      <div class="what">大纲 → 逐页装配图表数据与单页文案 → 生成可预览、可导出的 deck 卡（16:9）。</div>
+      <div class="ex"><b>例：</b>产物 <code>art_ba97ca33d6</code>，deck_id=<code>deck_458e303366</code>，4 页，可导出 48105 字节 / 4 页 PPTX。</div>
+      <div class="code">:853 / :824 · GET …/export.pptx</div>
+    </div>
+  </div>
+</div>
+
+<div class="flow"><div class="bar"></div><div class="lbl">返回 {message, canvas} → 前端整栏重绘</div><div class="bar"></div></div>
+
+<!-- L6 -->
+<div class="lane">
+  <div class="lane-head">
+    <span class="lane-tag">L6</span>
+    <span class="lane-title">呈现层 · 前端按 kind 分派渲染</span>
+    <span class="lane-note">新增一种卡型只需要加一个 renderer，不动对话主循环</span>
+  </div>
+  <div class="nodes">
+    <div class="node">
+      <div class="id">F6.1</div>
+      <div class="name">画布重绘 renderCanvas</div>
+      <div class="what">清空重画，但先记住 scrollTop 再写回；每张卡带 <code>data-artifact-id</code> / <code>data-kind</code>，便于定位与测试。</div>
+      <div class="ex"><b>例：</b>切换图表页签后不再跳回画布顶部（这是之前实测出来的一个真 bug，已修）。</div>
+      <div class="code">agent.js:344 · cardShell :401</div>
+    </div>
+    <div class="node">
+      <div class="id">F6.2</div>
+      <div class="name">6 个 renderer</div>
+      <div class="what">dimension_card（多选维度）、chart_card（图+表+SQL+抽屉）、resolution_card（候选点选）、clarification_card（问题+选项+自由输入）、outline_card（可改页/换绑）、deck_card（翻页预览）。</div>
+      <div class="ex"><b>例：</b>上次只加了 resolution_card / clarification_card 两个 renderer，对话主循环一行没改。</div>
+      <div class="code">agent.js:426</div>
+    </div>
+    <div class="node">
+      <div class="id">F6.3</div>
+      <div class="name">自动滚动到待操作卡</div>
+      <div class="what">画布产物变化时，如果存在"待确认 / 待澄清"的卡，自动滚进视野，避免它在折页下方点不到。</div>
+      <div class="ex"><b>例：</b>这正是上次"底部文字和选择被遮住"的修复点之一（根因是 flex 子项被压扁，已改成不收缩）。</div>
+      <div class="code">agent.js:374 · agent.css .canvas &gt; *</div>
+    </div>
+    <div class="node">
+      <div class="id">F6.4</div>
+      <div class="name">图表交互</div>
+      <div class="what">ECharts 由 spec.rows 逐点换算，支持图/表切换、图型切换；无命中值是 null 而不是 0，不会把"没数据"画成 0。</div>
+      <div class="ex"><b>例：</b>面积图/柱状图切换只改本地渲染，不发请求。</div>
+      <div class="code">agent.js:108 / :247 / :958</div>
+    </div>
+  </div>
+</div>
+
+<h2>二、三道人工关卡：触发条件是可以算出来的</h2>
+
+<h3>关卡① 字段消歧（取数之前）</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>用户输入</th><th>字典候选（真实记录数）</th><th>判定过程</th><th>结果</th></tr></thead>
+<tbody>
+<tr><td>ZARA</td><td>ZARA（中国）3772 · ZARA（淘宝）4</td><td>3772 ≥ 4 × 3 → 优势候选</td><td>直接取数，<b>不问</b>（只在回复里附一句按谁取数）</td></tr>
+<tr class="hi"><td>THE NORTH FACE</td><td>325 / 185 / 86 / 62 / 29 / 5 / 0</td><td>325 &lt; 185 × 3 = 555 → 不占优</td><td><b>落消歧卡，一条 SQL 都不发</b></td></tr>
+<tr><td>已在本次会话选过</td><td>—</td><td>命中 confirmed_field_values</td><td><b>绝不重复问第二遍</b></td></tr>
+</tbody>
+</table>
+</div>
+<p class="muted">判定用的是<b>记录数</b>而不是"候选个数"：品牌字典里 THE NORTH FACE / THE NORTH FACE（日本）/ 北面（淘宝）归一化后会落到同一个键，所以"候选多"是常态，"两个都像人话且量级接近"才是真疑问。没有记录数时退化为分数比：top_score ≥ second_score × 1.35。</p>
+
+<h3>关卡② 口径澄清（引擎拒答 / 空结果）</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>触发</th><th>判定代码</th><th>真实例子</th></tr></thead>
+<tbody>
+<tr><td>SQL 跑通但 0 行</td><td>status = succeeded 且 rows 为空</td><td>TNF「近30天 · 品牌竞争格局」→ 空 → 澄清卡 → 选「不限时间」→ <b>38 行</b></td></tr>
+<tr><td>引擎要求补口径</td><td>报错文本含 6 个标记之一：未返回可执行 SQL / 缺少 / 需要确认 / 无法在不确认 / 需要明确 / 请先确认</td><td>纤维类问题缺"占比构成口径"时，选项从报错里正则反挖（<code>按…</code>），并保留自由输入框</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>关卡③ 参数抽屉（取数之后）</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>能改什么</th><th>白名单字段</th><th>真实例子</th></tr></thead>
+<tbody>
+<tr><td>价格带分桶策略</td><td>strategy（rounded_width 自适应 / quantile 分位数 / equal_width 等宽）</td><td rowspan="3">ZARA 价格带 → 改「分位数 + 6 个桶」→ 覆盖同一张卡，version 2 → 3</td></tr>
+<tr><td>桶数 / 自定义边界</td><td>bucket_count / boundary / fixed_template</td></tr>
+<tr><td>时间窗口</td><td>time_window（不限 / 最近30天 / 近 6 个月 / 近 12 个月）</td></tr>
+</tbody>
+</table>
+</div>
+<p class="muted">抽屉映射到 SQL Agent 本来就认识的 <code>context.price_band_policy</code>，没有引入新词汇；白名单之外的一律忽略，畸形请求改不动别的东西。</p>
+
+<h2>三、一条真实会话的逐轮对照</h2>
+<p class="sub">会话 <code>conv_96ed342a28</code>「验收·Zara复盘」：12 条消息、5 个产物、全部数字来自真实库。</p>
+<div class="scroll">
+<table>
+<thead><tr><th>轮</th><th>你的原话</th><th>意图</th><th>判定依据</th><th>画布出现什么</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>最近想复盘一下 Zara，帮我分析看看</td><td><code>explore</code></td><td>实测打分 explore <b>3</b>（复盘／分析看看／看看）&gt; data_query <b>1</b>（看看）；品牌抽出 ZARA</td><td>维度卡「ZARA分析切入点」（4 个切入点）</td></tr>
+<tr><td>2</td><td>先看近 5 个月的纤维混纺和价格带，出图直观点</td><td><code>data_query</code></td><td>实测 data_query <b>3</b>（出图／价格带／图）；抽到 time_window=近5个月</td><td>2 张图卡：纤维混纺 <b>37 行</b>、价格带 <b>29 行</b></td></tr>
+<tr><td>3</td><td>帮我串个 4 页左右的 PPT 汇报思路</td><td><code>report_build</code></td><td>实测 report_build <b>9</b>＝「串个」「ppt」「汇报」3 词 ×3；page_count=4</td><td>大纲卡 4 页，<b>2 页自动绑定</b>已有图</td></tr>
+<tr><td>4</td><td>回退一下</td><td><code>rollback</code></td><td>实测 rollback <b>3</b>（「回退」1 词 ×3），其余四项全 0 → <b>直接胜出，未用到同分裁决</b></td><td>回复「当前没有可回退的历史版本」——当时两张图卡都还是 v=1，<b>判定正确</b></td></tr>
+<tr><td>5</td><td>好的，就这样</td><td><code>data_query</code>（兜底·<b>已移除</b>）</td><td><b>零关键词命中</b>；画布已有图。<b>2026-09-14 晚起此路不再存在</b>：零命中 → <code>unknown</code> 追问澄清</td><td>（旧行为：重跑那 2 张图）</td></tr>
+<tr><td>6</td><td>价格带再看一眼</td><td><code>data_query</code></td><td>命中「价格带」</td><td>只重取价格带一支，该卡升到 <b>v=3</b></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>同一套机制在 TNF 会话（<code>conv_27268bfee3</code>）里的样子</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>轮</th><th>输入 / 动作</th><th>系统做什么</th><th>产物</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>The North Face 最近30天在各二级类目下的价格带分布</td><td>解析出 7 个候选且不占优 → <b>不发 SQL</b>，落消歧卡</td><td><code>art_fb2770b1f8</code> resolution_card</td></tr>
+<tr><td>2</td><td>点选「THE NORTH FACE」</td><td>写 confirmed_field_values → 带着钉住的值穿透两道闸门重新取数；品牌维度空结果 → 落澄清卡</td><td>价格带图 + <code>art_23480b030c</code> clarification_card</td></tr>
+<tr><td>3</td><td>点「不限时间（看全部可用数据）」</td><td>该选项自带 time_window="" → 放开时间窗重跑</td><td><code>art_20739c0736</code> 价格带 <b>38 行</b></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>四、全部功能点索引（含代码位置）</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>编号</th><th>功能点</th><th>入口 / 函数</th><th>文件 : 行</th></tr></thead>
+<tbody>
+<tr><td class="num">F0.1–0.4</td><td>会话入口四件事</td><td>create / send / load / health</td><td>agent.js:1085 / 308 / 1024 / 1173</td></tr>
+<tr><td class="num">F1.1</td><td>场景解析</td><td>resolve_scene</td><td>conversation_service.py:81</td></tr>
+<tr><td class="num">F1.2</td><td>无场景明确失败</td><td>handle_message 分支</td><td>conversation_service.py:902</td></tr>
+<tr><td class="num">F1.3</td><td>维度资产</td><td>_ensure_dimension_options / recommend</td><td>:763 / dimension_recommender.py:165</td></tr>
+<tr><td class="num">F1.4</td><td>时间窗 / 页数抽取</td><td>extract_time_window / _extract_page_count</td><td>dimension_recommender.py:282 / intent_router.py:160</td></tr>
+<tr><td class="num">F2.0</td><td>意图判定走 DeepFlow agent（2026-09-15 新增）</td><td>_plan_turn_with_agent / deepflow_agent_service.plan_turn</td><td>conversation_service.py · services/deepflow_agent_service.py</td></tr>
+<tr><td class="num">F2.1</td><td>关键词加权打分（现为槽位与补充证据）</td><td>IntentRouter.route</td><td>intent_router.py:85</td></tr>
+<tr><td class="num">F2.2</td><td>硬优先级裁决</td><td>INTENT_PRIORITY</td><td>intent_router.py:20</td></tr>
+<tr><td class="num">F2.3</td><td>零命中 → unknown 追问（兜底已移除）</td><td>route 尾部 / _ask_intent_clarification</td><td>intent_router.py:102 · conversation_service（澄清分支）</td></tr>
+<tr><td class="num">F2.4</td><td>槽位抽取（品牌/页码）</td><td>_extract_brand / _extract_page_index</td><td>intent_router.py:146 / :171</td></tr>
+<tr><td class="num">F2.5</td><td>品牌记忆</td><td>working_memory.brand</td><td>conversation_service.py:928</td></tr>
+<tr><td class="num">F3.1</td><td>explore 分支</td><td>_handle_explore / plan_explore</td><td>:968 / canvas_orchestrator.py:15</td></tr>
+<tr><td class="num">F3.2</td><td>data_query 分支</td><td>_handle_data_query</td><td>:987</td></tr>
+<tr><td class="num">F3.3</td><td>report_build 分支</td><td>_handle_report_build / plan_report_build</td><td>:1594 / canvas_orchestrator.py:90</td></tr>
+<tr><td class="num">F3.4</td><td>canvas_revision 分支</td><td>_handle_revision / plan_canvas_revision</td><td>:1613 / canvas_orchestrator.py:123</td></tr>
+<tr><td class="num">F3.5</td><td>rollback 分支</td><td>_handle_rollback / plan_rollback</td><td>:1683 / canvas_orchestrator.py:157</td></tr>
+<tr><td class="num">F4.1</td><td>品牌归一</td><td>resolve_brand</td><td>:352</td></tr>
+<tr><td class="num">F4.2</td><td>关卡① 字段消歧</td><td>_ask_field_resolution / _has_dominant_candidate</td><td>:1271 / :462</td></tr>
+<tr><td class="num">F4.3</td><td>目标编排</td><td>plan_data_query</td><td>canvas_orchestrator.py:42</td></tr>
+<tr><td class="num">F4.4</td><td>并行取数</td><td>_run_goals</td><td>:668（上限 :47）</td></tr>
+<tr><td class="num">F4.5</td><td>单维度取数</td><td>_run_goal</td><td>:549</td></tr>
+<tr><td class="num">F4.6</td><td>两道 SQL 安全闸门</td><td>find_unresolved_filter_conditions / find_controlled_sql_filter_issues</td><td>field_value_resolver_service.py</td></tr>
+<tr><td class="num">F4.7</td><td>图表规格与结论</td><td>chart_spec_service.build / narrative</td><td>chart_spec_service.py:56 / :248</td></tr>
+<tr><td class="num">F4.8</td><td>关卡② 口径澄清</td><td>_ask_clarification / _classify_failure</td><td>:1326 / :1186</td></tr>
+<tr><td class="num">F4.9</td><td>真失败落失败卡</td><td>_execute_goals 失败分支</td><td>:1094</td></tr>
+<tr><td class="num">F5.1</td><td>按 dedupe_key 覆盖写卡</td><td>_upsert_artifact</td><td>:204</td></tr>
+<tr><td class="num">F5.2</td><td>成功取代待确认</td><td>_remove_by_key</td><td>:279（调用 :1121）</td></tr>
+<tr><td class="num">F5.3</td><td>关卡③ 参数抽屉</td><td>_apply_requery / _apply_query_params</td><td>:1540 / :648</td></tr>
+<tr><td class="num">F5.4</td><td>确认 / 澄清回写</td><td>apply_artifact_action → _apply_resolution / _apply_clarification</td><td>:1377 / :1410 / :1486</td></tr>
+<tr><td class="num">F5.5</td><td>改内容 / 回退</td><td>revise_artifact / rollback_artifact / rollback_latest</td><td>:285 / :317 / :331</td></tr>
+<tr><td class="num">F5.6</td><td>PPT 装配与导出</td><td>compile_deck / save_deck_card / export_deck</td><td>:853 / :824 / :871</td></tr>
+<tr><td class="num">F6.1</td><td>画布重绘</td><td>renderCanvas / cardShell</td><td>agent.js:344 / :401</td></tr>
+<tr><td class="num">F6.2</td><td>6 个 renderer</td><td>renderers</td><td>agent.js:426</td></tr>
+<tr><td class="num">F6.3</td><td>自动滚到待操作卡</td><td>revealPendingCheckpoint</td><td>agent.js:374</td></tr>
+<tr><td class="num">F6.4</td><td>图表交互</td><td>buildOption / mountChart / dataTable</td><td>agent.js:108 / :247 / :958</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>五、HTTP 接口清单</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>方法</th><th>路径</th><th>对应功能点</th></tr></thead>
+<tbody>
+<tr><td>GET</td><td><code>/api/v1/conversations</code></td><td>会话列表</td></tr>
+<tr><td>POST</td><td><code>/api/v1/conversations</code></td><td>F0.1 创建</td></tr>
+<tr><td>GET</td><td><code>/api/v1/conversations/{id}</code></td><td>F0.3 拉详情（消息 + 画布）</td></tr>
+<tr><td>GET</td><td><code>/api/v1/conversations/{id}/messages</code></td><td>消息列表</td></tr>
+<tr><td>POST</td><td><code>/api/v1/conversations/{id}/messages</code></td><td>F0.2 发消息（主入口）</td></tr>
+<tr><td>GET</td><td><code>/api/v1/conversations/{id}/canvas</code></td><td>画布产物列表</td></tr>
+<tr><td>POST</td><td><code>…/artifacts/{aid}/revise</code></td><td>F5.5 改卡内容</td></tr>
+<tr><td>POST</td><td><code>…/artifacts/{aid}/rollback</code></td><td>F5.5 回退单卡</td></tr>
+<tr><td>GET</td><td><code>…/artifacts/{aid}/sql</code></td><td>看该卡底层 SQL</td></tr>
+<tr class="hi"><td>POST</td><td><code>…/artifacts/{aid}/resolve</code></td><td><b>F5.4 画布人工动作统一入口</b>（本次新增）</td></tr>
+<tr><td>POST</td><td><code>/api/v1/conversations/{id}/outline</code></td><td>生成大纲</td></tr>
+<tr><td>PATCH</td><td><code>…/outline/pages/{pid}</code></td><td>改单页</td></tr>
+<tr><td>POST</td><td><code>…/outline/compile</code></td><td>F5.6 编译 PPT</td></tr>
+<tr><td>GET</td><td><code>…/decks/{did}/preview</code></td><td>PPT 预览</td></tr>
+<tr><td>GET</td><td><code>…/decks/{did}/export.pptx</code></td><td>F5.6 导出 PPTX</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>六、五个分支的产物对照</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>意图</th><th>处理器</th><th>产生的产物 kind</th><th>会不会重新取数</th></tr></thead>
+<tbody>
+<tr><td><code>explore</code></td><td>_handle_explore</td><td>dimension_card</td><td>不会</td></tr>
+<tr><td><code>data_query</code></td><td>_handle_data_query</td><td>chart_card / resolution_card / clarification_card</td><td>会</td></tr>
+<tr><td><code>report_build</code></td><td>_handle_report_build</td><td>outline_card</td><td>不会（只引用已有图）</td></tr>
+<tr><td><code>canvas_revision</code></td><td>_handle_revision</td><td>outline_card（+ 说「生成」时 deck_card）</td><td>不会</td></tr>
+<tr><td><code>rollback</code></td><td>_handle_rollback</td><td>被回退的那张卡恢复一版</td><td>不会</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>七、已知边界与两个真实缺陷</h2>
+<div class="callout warn">
+<b>缺陷 A：确认动作不幂等。</b>会话 <code>conv_7a4cccfb49</code> 里，同一条「已确认品牌 THE NORTH FACE →（日本）」的回复重复了 17 次（28 条消息只有 7 条不同），澄清卡 version 涨到 18。
+根因：<code>apply_artifact_action</code> 每次都无条件重跑取数并追加一条助手消息，后端没有幂等保护，前端也没置忙。大概率由早前交互测试的重复点击造成，但真实用户双击同样会复现。<b>未修，待你决定。</b>
+</div>
+<div class="callout warn">
+<b>缺陷 B：跨轮槽位拼接重复。</b>一张失败卡的 goal 是 <code>THE NORTH FACE ZARA 各二级类目的价格分布情况</code>——两个品牌被焊在一起，下游直接拒绝。当轮槽位应<b>覆盖</b>同名上下文槽位，而不是追加。<b>未修，待你决定。</b>
+</div>
+<ul>
+<li><b>意图路由的天然边界：</b>全靠中文关键词命中，换同义词、英文或口语说法会漏判 → 零命中落 <code>unknown</code>，追问一轮澄清（<b>兜底已于 2026-09-14 按用户要求移除</b>；关键词漏判的成本从"多跑一次数"变成"多问一轮"）。</li>
+<li><b>前后端时间窗词表必须同步：</b>前端 4 项、后端 6 条正则，任何一边改了另一边没改，时间窗就会错位。</li>
+<li><b>消歧阈值 ×3 是经验值：</b>对字典里记录数分布极不均衡的品牌敏感，改它要重新跑一遍回归。</li>
+<li><b>展示截断是正常路径：</b>图表卡上限 60 行，但 <code>spec.total_rows</code> 必须等于真实行数——这是"如实声明"，不是造假。</li>
+</ul>
+
+<h2>八、约束与校验命令</h2>
+<h3>硬约束</h3>
+<ul>
+<li><b>新功能不允许用假数据：</b>允许硬编码规则/词表/阈值（逻辑参数），禁止伪造或改写业务数值，展示截断须如实声明总数。</li>
+<li><b>老功能流程不动：</b><code>index.html</code> 只引 <code>styles.css</code> + <code>main.js</code>，不引 <code>agent.*</code>，新旧页面完全独立。</li>
+<li><b>所有新功能变化都落在 <code>agent.html</code>（及其 agent.css / agent.js）：</b>后端若有共享文件改动，必须保持可选参数 / 带默认值，旧接口行为不变。</li>
+</ul>
+<h3>校验</h3>
+<pre><span class="c"># 静态 + 运行时双层守卫：扫造数写法，并把每张图表卡的 SQL 拉回 MySQL 逐值比对</span>
+./.venv/bin/python scripts/verify_canvas_no_fake_data.py --limit 50
+
+<span class="c"># 只跑静态层（不需要后端）</span>
+./.venv/bin/python scripts/verify_canvas_no_fake_data.py --no-runtime</pre>
+<p class="muted">最近一次运行：静态 9 个链路文件 + 测试脚本零命中；运行时 41 张卡 / 926 行逐值 0 偏差，退出码 0。</p>
+
+<h2>九、勘误与机制补充（2026-09-14 二次核验）</h2>
+<p class="muted">本节的每一条都是把真实句子喂给 <code>IntentRouter.route()</code> 与 <code>resolve_scene()</code> 跑出来的结果，不是推测。凡与上文冲突，以本节为准。</p>
+<table>
+<thead><tr><th>位置</th><th>原先写的</th><th>实测事实</th></tr></thead>
+<tbody>
+<tr><td>F1.1 场景解析例子</td><td>「最近想复盘一下 Zara，帮我分析看看」命中「价格」「品牌」「竞品」→ 选 competitor</td><td><b>错。</b>该句对 5 组提示词<b>全部零命中</b>，走的是第 ③ 级<b>默认兜底</b> <code>DEFAULT_SCENE_ID = scene_prd_competitor</code>。它选中竞品场景与句子里出现「价格/品牌/竞品」毫无关系。</td></tr>
+<tr><td>F1.1 触发时机</td><td>（未写）</td><td><b>补：</b>场景<b>不是每条消息都重算</b>。只有「显式传 scene_id」或「会话还没有场景」时才调 <code>resolve_scene</code>，其余一律沿用 <code>conversation.scene_id</code>。所以会话一旦锁定场景，后面问什么都用同一套字段口径。</td></tr>
+<tr><td>F1.1 平局规则</td><td>（未写）</td><td><b>补：</b>择优处是 <code>if score and (best is None or score &gt; best[0])</code> ——严格大于才替换，因此<b>同分时取 <code>SCENE_ROUTING_HINTS</code> 列表中最先出现的那个</b>。实测：「先看近 5 个月的纤维混纺和价格带」competitor(价格)=2、price(价格带)=2、scene_0004(纤维)=2 三组同分 → 取靠前的 competitor。</td></tr>
+<tr><td>F2.1 打分例子</td><td>「帮我串个 4 页左右的 PPT 汇报思路」→ 命中 4 个词 → <b>12 分</b></td><td><b>错。</b>实测 <b>9 分</b>＝「串个」「ppt」「汇报」<b>3 个词</b> ×3。「4 页」不是汇报词（词表里是「几页」），它只被 <code>PAGE_COUNT_PATTERN</code> 抽成 <code>page_count=4</code>。</td></tr>
+<tr><td>F2.1 计分口径</td><td>（未写）</td><td><b>补：</b><code>_hits</code> 用子串判定且<b>不做去重</b>，所以「不要了」与「不要」会同时命中同一句 → 改画布白拿 2 个命中（4 分）。</td></tr>
+<tr><td>F2.2 优先级作用域</td><td>「色彩不要了，直接生成 PPT」→ <b>汇报赢</b>，走汇报分支</td><td><b>错。</b>裁决循环是 <code>if scores[c] &gt; best</code>，优先级<b>只在同分时生效，压不过更高分</b>。实测该句 改画布 <b>4</b> &gt; 汇报 <b>3</b> → <b>走 canvas_revision（删页）</b>。代码注释（<code>intent_router.py:18</code>）声称 "the build request must win"，与真实行为不符——属注释与行为不一致的边界，改动会变更行为，<b>未擅自修改</b>。</td></tr>
+<tr><td>L2 词表规模</td><td>（曾口头说 68 个）</td><td><b>更正：</b>实测 <b>88</b> 个 —— 回退 6 / 汇报 15 / 改画布 28 / 取数 30 / 探索 9；种子品牌 <b>28</b> 个；时间窗正则 <b>6</b> 条；维度主题 <b>6</b> 组。</td></tr>
+</tbody>
+</table>
+<h3>为什么"零命中"不会走错（2026-09-14 晚更新）</h3>
+<p><b>兜底已按用户要求移除。</b>零命中时 <code>intent</code> 现在落到 <code>INTENT_UNKNOWN</code>，由 <code>_ask_intent_clarification</code> 追问澄清并纯文字列出场景可切入方向，<b>不出任何画布卡</b>。原 <code>INTENT_EXPLORE if not has_charts else INTENT_DATA_QUERY</code> 行为（真实会话第 5 轮「好的，就这样」→ 重跑 2 张图）仅作为历史记录保留。</p>
+
+<footer>
+新画布全链路功能流程图与功能点手册 · 2026-09-14 · 数据源：MySQL <code>dataservice_test_local</code>（8.0.30，64 张真实业务表）<br>
+页面 http://127.0.0.1:18901/agent.html ｜ 后端 127.0.0.1:18900 ｜ 打开页面请硬刷新（Cmd+Shift+R）
+</footer>
+
+</div>
+</body>
+</html>

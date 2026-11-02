@@ -1,5 +1,5 @@
 const UI_STATE_KEY = "fz_workflow_ui_state_v1";
-const VALID_TABS = new Set(["overview", "config", "clothing", "query", "delivery"]);
+const VALID_TABS = new Set(["overview", "config", "clothing", "query"]);
 
 const state = {
   backendBase: "http://127.0.0.1:18900",
@@ -9,6 +9,7 @@ const state = {
   },
   agentWaitTimerId: 0,
   activeTab: "config",
+  modelSelection: { current: "", options: [] },
   scenes: [],
   createSceneCollapsed: true,
   sceneListCollapsed: false,
@@ -56,6 +57,9 @@ const state = {
   sceneLoadError: "",
   autoRecommendedSceneIds: {},
   intentTemplatesCollapsed: true,
+  priceBandDetailsCollapsed: true,
+  fieldResolutionCollapsed: true,
+  queryResultCollapsed: true,
   fieldResolution: {
     analysis: null,
     intent: "",
@@ -67,13 +71,14 @@ const state = {
   inputCorrectionLexicon: [],
   currentSession: null,
   currentDeck: null,
-  currentArtifact: null,
   currentReportState: null,
-  pptScheme: "presenton_ai",
-  pptSchemes: [
-    { scheme: "presenton_ai", name: "Presenton AI PPT 生成", category: "AI PPT 生成器", description: "调用本地或配置的 presenton/presenton 服务，由大模型生成并导出 .pptx。" },
-  ],
+  currentReportPlan: null,
+  activeReportPageId: "",
   currentSlide: null,
+  deckHistoryDeckId: "",
+  deckUndoStack: [],
+  deckRedoStack: [],
+  deckLastKnownRevisionId: "",
   clothing: {
     facets: null,
     items: [],
@@ -211,7 +216,6 @@ function loadStoredUiState() {
   const sceneId = String(saved.currentSceneId || "").trim();
   const sessionId = String(saved.currentSessionId || "").trim();
   const activeTab = String(saved.activeTab || "").trim();
-  const pptScheme = String(saved.pptScheme || "").trim();
   const rawPriceBandPolicy = saved.priceBandPolicy && typeof saved.priceBandPolicy === "object" ? saved.priceBandPolicy : {};
   const priceBandMode = String(rawPriceBandPolicy.mode || saved.priceBandMode || "").trim();
   const hasStoredPriceBandBoundary =
@@ -220,11 +224,22 @@ function loadStoredUiState() {
     Object.prototype.hasOwnProperty.call(rawPriceBandPolicy, "boundary_rounding") ||
     Object.prototype.hasOwnProperty.call(rawPriceBandPolicy, "custom_boundaries") ||
     Object.prototype.hasOwnProperty.call(rawPriceBandPolicy, "boundaries");
-  state.backendBase = normalizeBackendBase(backendBase || state.backendBase);
+  state.backendBase = repairLocalBackendBase(backendBase || state.backendBase);
+  if (backendBase && normalizeBackendBase(backendBase) !== state.backendBase) {
+    try {
+      window.localStorage?.setItem(
+        UI_STATE_KEY,
+        JSON.stringify({ ...saved, backendBase: state.backendBase })
+      );
+    } catch (error) {
+      console.warn("repair backend base failed", error);
+    }
+  }
   if (sceneId) state.currentSceneId = sceneId;
   if (sessionId) state.restoreSessionId = sessionId;
-  if (VALID_TABS.has(activeTab)) state.activeTab = activeTab;
-  if (pptScheme) state.pptScheme = pptScheme;
+  // “汇报产物”曾是独立标签，现已并入查询执行页；兼容旧浏览器状态。
+  if (activeTab === "delivery") state.activeTab = "query";
+  else if (VALID_TABS.has(activeTab)) state.activeTab = activeTab;
   state.priceBandPolicy = normalizePriceBandPolicyRaw({
     mode: priceBandMode || state.priceBandPolicy.mode,
     bucket_count: rawPriceBandPolicy.bucket_count ?? rawPriceBandPolicy.adaptive_bucket_count ?? state.priceBandPolicy.bucket_count,
@@ -237,6 +252,10 @@ function loadStoredUiState() {
   state.priceBandMode = state.priceBandPolicy.mode;
   state.restoredGoalInput = String(saved.goalInput || "").trim();
   state.restoredQueryIntentInput = String(saved.queryIntentInput || "").trim();
+  state.deckHistoryDeckId = String(saved.deckHistoryDeckId || "").trim();
+  state.deckUndoStack = Array.isArray(saved.deckUndoStack) ? saved.deckUndoStack.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  state.deckRedoStack = Array.isArray(saved.deckRedoStack) ? saved.deckRedoStack.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  state.deckLastKnownRevisionId = String(saved.deckLastKnownRevisionId || "").trim();
 }
 
 function persistUiState() {
@@ -246,11 +265,14 @@ function persistUiState() {
       currentSceneId: state.currentSceneId || "",
       currentSessionId: state.currentSession?.session_id || state.restoreSessionId || "",
       activeTab: VALID_TABS.has(state.activeTab) ? state.activeTab : "config",
-      pptScheme: state.pptScheme || "presenton_ai",
       priceBandMode: normalizePriceBandMode(state.priceBandPolicy?.mode || state.priceBandMode),
       priceBandPolicy: normalizePriceBandPolicyRaw(state.priceBandPolicy),
       goalInput: el("goalInput")?.value || state.restoredGoalInput || "",
       queryIntentInput: el("queryIntentInput")?.value || state.restoredQueryIntentInput || "",
+      deckHistoryDeckId: state.deckHistoryDeckId || "",
+      deckUndoStack: state.deckUndoStack || [],
+      deckRedoStack: state.deckRedoStack || [],
+      deckLastKnownRevisionId: state.deckLastKnownRevisionId || "",
     };
     window.localStorage?.setItem(UI_STATE_KEY, JSON.stringify(payload));
   } catch (error) {
@@ -707,6 +729,42 @@ function shouldShowPriceBandControls(intent = currentQueryIntentText()) {
   );
 }
 
+function renderPriceBandDetailsCollapse() {
+  const collapsed = state.priceBandDetailsCollapsed;
+  const wrap = el("priceBandDetailsWrap");
+  const button = el("togglePriceBandDetailsBtn");
+  if (wrap) wrap.hidden = collapsed;
+  if (button) {
+    button.textContent = collapsed ? "+" : "-";
+    button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    button.title = collapsed ? "展开价格带说明" : "收起价格带说明";
+  }
+}
+
+function renderFieldResolutionCollapse() {
+  const collapsed = state.fieldResolutionCollapsed;
+  const content = el("fieldResolutionContent");
+  const button = el("toggleFieldResolutionBtn");
+  if (content) content.hidden = collapsed;
+  if (button) {
+    button.textContent = collapsed ? "+" : "-";
+    button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    button.title = collapsed ? "展开字段识别结果" : "收起字段识别结果";
+  }
+}
+
+function renderQueryResultCollapse() {
+  const collapsed = state.queryResultCollapsed;
+  const content = el("queryResultContent");
+  const button = el("toggleQueryResultBtn");
+  if (content) content.hidden = collapsed;
+  if (button) {
+    button.textContent = collapsed ? "+" : "-";
+    button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    button.title = collapsed ? "展开查询结果" : "收起查询结果";
+  }
+}
+
 function renderPriceBandModeControl() {
   const toolbar = document.querySelector(".query-band-toolbar");
   const visible = shouldShowPriceBandControls();
@@ -776,6 +834,7 @@ function renderPriceBandModeControl() {
   state.priceBandMode = nextPolicy.mode;
   if (!visible) {
     persistUiState();
+    renderPriceBandDetailsCollapse();
     return;
   }
   if (hint) {
@@ -803,6 +862,7 @@ function renderPriceBandModeControl() {
         <span>需要固定区间时，不再切换模式，直接在“中间边界”输入区间边界，例如 100,200,400,800。</span>
       </div>`;
   }
+  renderPriceBandDetailsCollapse();
   persistUiState();
 }
 
@@ -1318,7 +1378,7 @@ function renderFieldResolutionPanel() {
       : "";
   summary.textContent = ambiguousCount
     ? `${inferredIntentText}字段已自动识别 ${analysis.matched_term_count || 0} 个候选词，其中 ${ambiguousCount} 个有多个候选，已默认选择第一项，可在下拉框中调整；${resolvedCount} 个已自动识别。`
-    : `${inferredIntentText}字段已自动识别 ${analysis.matched_term_count || 0} 个候选词，未发现歧义，请点击“确认并生成SQL”继续。`;
+    : `${inferredIntentText}字段已自动识别 ${analysis.matched_term_count || 0} 个候选词，未发现歧义；请先确认 PPT 大纲，再进入对应页面生成 SQL。`;
 
   list.innerHTML = terms
     .map((term) => {
@@ -1385,6 +1445,7 @@ function renderFieldResolutionPanel() {
       `;
     })
     .join("");
+  renderFieldResolutionCollapse();
 }
 
 async function analyzeFieldResolutionForIntent(intent, requestId = state.fieldResolutionRequestId) {
@@ -1628,7 +1689,8 @@ async function createSessionForCurrentScene({ intent = "" } = {}) {
 function syncBackendBase() {
   const backendInput = el("backendBase");
   if (!backendInput) return;
-  const nextBase = normalizeBackendBase(backendInput.value);
+  const nextBase = repairLocalBackendBase(backendInput.value);
+  if (backendInput.value !== nextBase) backendInput.value = nextBase;
   if (state.backendBase !== nextBase) {
     state.backendBase = nextBase;
     persistUiState();
@@ -1645,6 +1707,22 @@ function normalizeBackendBase(rawValue) {
     base = `http://${base}`;
   }
   return base.replace(/\/+$/, "");
+}
+
+function repairLocalBackendBase(rawValue) {
+  const base = normalizeBackendBase(rawValue);
+  try {
+    const parsed = new URL(base);
+    const isLocalHost = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+    // Port 18901 serves the static frontend. The local API is intentionally
+    // separate on 18900, so never let a persisted frontend URL become an API URL.
+    if (isLocalHost && parsed.port === "18901") {
+      return `${parsed.protocol}//${parsed.hostname}:18900`;
+    }
+  } catch (_error) {
+    // normalizeBackendBase has already provided the best available value.
+  }
+  return base;
 }
 
 function setBackendBaseInput(base) {
@@ -1713,12 +1791,12 @@ function renderAgentWaitHint() {
   if (sqlResultBtn) {
     const busy = Boolean(sqlResultWait?.startedAt);
     sqlResultBtn.disabled = busy;
-    sqlResultBtn.textContent = busy ? "SQL处理中..." : "SQL与结果";
+    sqlResultBtn.textContent = busy ? "规划中..." : "生成 PPT 大纲";
   }
   if (runQueryBtn) {
     const busy = Boolean(sqlResultWait?.startedAt);
     runQueryBtn.disabled = busy;
-    runQueryBtn.textContent = busy ? "执行中..." : "确认并生成SQL";
+    runQueryBtn.textContent = busy ? "生成中..." : "生成 PPT 大纲";
   }
   if (!hintEl) return;
   if (!waitItems.length) {
@@ -1908,11 +1986,6 @@ function getCurrentIntentText() {
   );
 }
 
-function setDeliveryActionHint(message) {
-  const hint = el("deliveryActionHint");
-  if (hint) hint.textContent = message || "";
-}
-
 function setCreateSceneHint(message) {
   const hint = el("createSceneHint");
   if (hint) hint.textContent = message || "";
@@ -1920,13 +1993,17 @@ function setCreateSceneHint(message) {
 
 function clearReportStateViews() {
   state.currentDeck = null;
-  state.currentArtifact = null;
   state.currentSlide = null;
   state.currentReportState = null;
-  if (el("slideView")) el("slideView").textContent = "";
-  if (el("deckView")) el("deckView").textContent = "";
+  state.currentReportPlan = null;
+  state.activeReportPageId = "";
+  state.deckHistoryDeckId = "";
+  state.deckUndoStack = [];
+  state.deckRedoStack = [];
+  state.deckLastKnownRevisionId = "";
   renderSlidePreview(null);
-  syncArtifactDownload();
+  renderDeckHistoryControls();
+  renderReportWorkflow();
 }
 
 function clearCurrentSessionState() {
@@ -1938,6 +2015,70 @@ function clearCurrentSessionState() {
   renderSessionHeader();
   renderQueryHistory();
   persistUiState();
+}
+
+const MAX_DECK_HISTORY_STEPS = 30;
+
+function getCurrentDeckId() {
+  return String(state.currentDeck?.deck_id || "").trim();
+}
+
+function trimDeckHistory(stack) {
+  return stack.slice(-MAX_DECK_HISTORY_STEPS);
+}
+
+function renderDeckHistoryControls() {
+  const undoBtn = el("deckUndoBtn");
+  const redoBtn = el("deckRedoBtn");
+  const hasDeck = Boolean(getCurrentDeckId());
+  if (undoBtn) undoBtn.disabled = !hasDeck || state.deckUndoStack.length === 0;
+  if (redoBtn) redoBtn.disabled = !hasDeck || state.deckRedoStack.length === 0;
+}
+
+function resetDeckHistoryState(deckId = "") {
+  state.deckHistoryDeckId = String(deckId || "").trim();
+  state.deckUndoStack = [];
+  state.deckRedoStack = [];
+  state.deckLastKnownRevisionId = "";
+  persistUiState();
+  renderDeckHistoryControls();
+}
+
+async function hydrateDeckHistoryForDeck(deck) {
+  const deckId = String(deck?.deck_id || "").trim();
+  const revisionId = String(deck?.current_revision_id || "").trim();
+  if (!deckId) {
+    resetDeckHistoryState("");
+    return;
+  }
+  if (state.deckHistoryDeckId && state.deckHistoryDeckId !== deckId) {
+    resetDeckHistoryState(deckId);
+  }
+  if (
+    state.deckHistoryDeckId !== deckId ||
+    state.deckLastKnownRevisionId !== revisionId ||
+    (!state.deckUndoStack.length && !state.deckRedoStack.length && deckId)
+  ) {
+    try {
+      const revisions = await api(`/api/v1/decks/${encodeURIComponent(deckId)}/revisions`);
+      const revisionIds = Array.isArray(revisions)
+        ? revisions
+            .map((item) => String(item?.deck_revision_id || "").trim())
+            .filter(Boolean)
+        : [];
+      const currentIndex = revisionIds.indexOf(revisionId);
+      state.deckUndoStack = currentIndex >= 0 ? revisionIds.slice(0, currentIndex) : revisionIds.slice(0, -1);
+      state.deckRedoStack = currentIndex >= 0 ? revisionIds.slice(currentIndex + 1) : [];
+    } catch (error) {
+      console.warn("hydrate deck history failed", error);
+      state.deckUndoStack = [];
+      state.deckRedoStack = [];
+    }
+    state.deckHistoryDeckId = deckId;
+  }
+  state.deckLastKnownRevisionId = revisionId;
+  persistUiState();
+  renderDeckHistoryControls();
 }
 
 function clearCurrentSceneDetailState() {
@@ -2017,7 +2158,7 @@ async function withSessionRecovery(action, { createIfMissing = false, intent = "
     dropSessionFromState(missingSessionId);
     await refreshSessions();
     if (!createIfMissing) {
-      throw new Error("当前会话已失效，请重新选择提问历史后再操作");
+      throw new Error("当前会话已失效，请重新选择会话后再操作");
     }
     let session = state.currentSession;
     if (!session) {
@@ -2201,17 +2342,16 @@ function formatQueryPlanView(queryPlan) {
   return lines.join("\n");
 }
 
-function formatQueryRunView(queryRun) {
+function formatQuerySqlView(queryRun) {
   if (!queryRun) return "";
   const sql = String(queryRun.sql || "").trim();
+  return sql ? (sql.endsWith(";") ? sql : `${sql};`) : "-- 暂无可执行 SQL";
+}
+
+function formatQueryRunInfoView(queryRun) {
+  if (!queryRun) return "";
   const lines = [];
-  if (sql) {
-    lines.push(sql.endsWith(";") ? sql : `${sql};`);
-  } else {
-    lines.push("-- 暂无可执行 SQL");
-  }
-  lines.push("");
-  lines.push(`# 状态: ${queryRun.status || "-"}`);
+  lines.push(`# 执行状态: ${queryRun.status || "-"}`);
   lines.push(`# 返回行数: ${Number(queryRun.rows_count || 0)}`);
   lines.push(`# 耗时(ms): ${queryRun.duration_ms ?? "-"}`);
   const lineage = queryRun.lineage && typeof queryRun.lineage === "object" ? queryRun.lineage : {};
@@ -2236,7 +2376,7 @@ function formatQueryRunView(queryRun) {
     }
   }
   if (queryRun.sql_explanation) {
-    lines.push(`# 说明: ${queryRun.sql_explanation}`);
+    lines.push(`# SQL 说明: ${queryRun.sql_explanation}`);
   }
   if (Array.isArray(queryRun.insight_summary) && queryRun.insight_summary.length) {
     lines.push("# 结果摘要:");
@@ -2245,6 +2385,12 @@ function formatQueryRunView(queryRun) {
     }
   }
   return lines.join("\n");
+}
+
+function renderQueryRunViews(queryRun) {
+  if (el("queryRunView")) el("queryRunView").textContent = formatQuerySqlView(queryRun);
+  if (el("queryRunInfoView")) el("queryRunInfoView").textContent = formatQueryRunInfoView(queryRun);
+  renderQueryTable(queryRun?.result_preview || []);
 }
 
 function renderSimpleTable(columns, rows) {
@@ -2937,7 +3083,6 @@ async function deleteScene(scene) {
     currentSession: state.currentSession,
     restoreSessionId: state.restoreSessionId,
     currentDeck: state.currentDeck,
-    currentArtifact: state.currentArtifact,
     currentSlide: state.currentSlide,
     currentReportState: state.currentReportState,
   };
@@ -2958,7 +3103,6 @@ async function deleteScene(scene) {
     state.currentSession = snapshot.currentSession;
     state.restoreSessionId = snapshot.restoreSessionId;
     state.currentDeck = snapshot.currentDeck;
-    state.currentArtifact = snapshot.currentArtifact;
     state.currentSlide = snapshot.currentSlide;
     state.currentReportState = snapshot.currentReportState;
     renderSceneWorkspaceState();
@@ -3146,12 +3290,38 @@ function removeSelectedDraftCandidate(kind, candidateId) {
   renderSceneConfig();
 }
 
-function formatHistoryTime(value) {
+function formatHistoryMetadata(value) {
   const ts = parseDateTime(value);
-  if (!ts) return "-";
+  if (!ts) return { date: "-", time: "-" };
   const date = new Date(ts);
   const pad = (num) => String(num).padStart(2, "0");
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return {
+    date: `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    time: `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+  };
+}
+
+function formatSessionStatus(status) {
+  const labels = {
+    created: "新建",
+    planning: "规划中",
+    waiting_task_confirmation: "待确认",
+    generating_query_plan: "生成方案",
+    waiting_query_plan_confirmation: "待确认",
+    generating_sql: "生成SQL",
+    waiting_sql_confirmation: "待确认",
+    executing_query: "执行中",
+    summarizing_result: "结果就绪",
+    generating_slide_draft: "生成页面",
+    waiting_slide_review: "待写入",
+    updating_deck: "整理Deck",
+    recommending_next_task: "推荐中",
+    waiting_next_task_confirmation: "待确认",
+    completed: "完成",
+    failed: "失败",
+    cancelled: "已取消",
+  };
+  return labels[String(status || "").trim()] || "-";
 }
 
 function getHistorySession(entry) {
@@ -3196,24 +3366,44 @@ function upsertQueryHistoryEntry(entry) {
 function clearQueryResultViews() {
   if (el("queryPlanView")) el("queryPlanView").textContent = "";
   if (el("queryRunView")) el("queryRunView").textContent = "";
+  if (el("queryRunInfoView")) el("queryRunInfoView").textContent = "";
   if (el("querySaveHint")) el("querySaveHint").textContent = "";
   renderQueryTable([]);
+}
+
+function getSessionsForCurrentScene() {
+  const sceneId = String(state.currentSceneId || "").trim();
+  if (!sceneId) return [];
+  // Keep the complete session cache for recovery, but scope the sidebar to the active scene.
+  return state.sessions.filter((session) => String(session?.scene_id || "").trim() === sceneId);
 }
 
 function renderSessions() {
   const list = el("sessionsList");
   if (!list) return;
   list.innerHTML = "";
-  for (const session of state.sessions) {
+  const sessions = getSessionsForCurrentScene();
+  for (const session of sessions) {
     const row = document.createElement("div");
     row.className = `history-row ${state.currentSession?.session_id === session.session_id ? "active" : ""}`;
     const item = document.createElement("button");
     item.className = "list-item history-main-btn";
-    item.innerHTML =
-      `<strong>${escapeHtml(session.global_goal || "未命名问题")}</strong>` +
-      `<span class="muted">${escapeHtml(formatHistoryTime(session.updated_at || session.created_at))} · ${escapeHtml(session.status || "-")}</span>`;
+    const goal = session.global_goal || "未命名问题";
+    item.title = goal;
+    item.innerHTML = `<strong class="history-title">${escapeHtml(goal)}</strong>`;
     item.onclick = () => run(() => selectQueryHistory(session.session_id));
     row.appendChild(item);
+
+    const meta = formatHistoryMetadata(session.updated_at || session.created_at);
+    const statusLabel = formatSessionStatus(session.status);
+    const metaColumn = document.createElement("div");
+    metaColumn.className = "history-meta muted";
+    metaColumn.title = `${meta.date} ${meta.time} · ${statusLabel}`;
+    metaColumn.innerHTML =
+      `<time>${escapeHtml(meta.date)}</time>` +
+      `<time>${escapeHtml(meta.time)}</time>` +
+      `<span class="history-status">${escapeHtml(statusLabel)}</span>`;
+    row.appendChild(metaColumn);
 
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "history-delete-btn";
@@ -3225,103 +3415,17 @@ function renderSessions() {
     row.appendChild(deleteBtn);
     list.appendChild(row);
   }
-  if (!state.sessions.length) {
+  if (!sessions.length) {
     const empty = document.createElement("div");
     empty.className = "scene-empty muted";
-    empty.textContent = "暂无提问历史。";
+    empty.textContent = "当前场景暂无会话。";
     list.appendChild(empty);
   }
 }
 
 function renderQueryHistory() {
-  const list = el("queryHistoryList");
-  if (list) list.innerHTML = "";
-  const entries = state.queryHistory;
-  for (const entry of entries) {
-    const session = getHistorySession(entry);
-    if (!session?.session_id) continue;
-    const queryRun = entry.query_run || null;
-    const row = document.createElement("div");
-    row.className = `history-row query-history-row ${state.currentSession?.session_id === session.session_id ? "active" : ""}`;
-
-    const main = document.createElement("button");
-    main.className = "list-item history-main-btn";
-    const statusText = queryRun
-      ? `${queryRun.status || "-"} · ${Number(queryRun.rows_count || 0)} rows`
-      : `${session.status || "-"} · 未执行`;
-    main.innerHTML =
-      `<strong>${escapeHtml(session.global_goal || "未命名问题")}</strong>` +
-      `<span class="muted">${escapeHtml(formatHistoryTime(session.updated_at || session.created_at))} · ${escapeHtml(statusText)}</span>`;
-    main.onclick = () => run(() => selectQueryHistory(session.session_id));
-    row.appendChild(main);
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "history-delete-btn";
-    deleteBtn.textContent = "删除";
-    deleteBtn.onclick = (event) => {
-      event.stopPropagation();
-      run(() => deleteQueryHistory(session.session_id));
-    };
-    row.appendChild(deleteBtn);
-    if (list) list.appendChild(row);
-  }
-  if (list && !entries.length) {
-    const empty = document.createElement("div");
-    empty.className = "scene-empty muted";
-    empty.textContent = "当前场景暂无提问历史。点击“生成并执行”后会自动保存。";
-    list.appendChild(empty);
-  }
-  renderDeliveryHistory();
-}
-
-function renderDeliveryHistory() {
-  const list = el("deliveryHistoryList");
-  const hint = el("deliverySessionHint");
-  if (!list) return;
-  list.innerHTML = "";
-  const entries = state.queryHistory;
-  for (const entry of entries) {
-    const session = getHistorySession(entry);
-    if (!session?.session_id) continue;
-    const queryRun = entry.query_run || null;
-    const row = document.createElement("div");
-    row.className = `history-row query-history-row ${state.currentSession?.session_id === session.session_id ? "active" : ""}`;
-
-    const main = document.createElement("button");
-    main.className = "list-item history-main-btn";
-    const statusText = queryRun
-      ? `${queryRun.status || "-"} · ${Number(queryRun.rows_count || 0)} rows`
-      : `${session.status || "-"} · 未执行`;
-    main.innerHTML =
-      `<strong>${escapeHtml(session.global_goal || "未命名问题")}</strong>` +
-      `<span class="muted">${escapeHtml(formatHistoryTime(session.updated_at || session.created_at))} · ${escapeHtml(statusText)}</span>`;
-    main.onclick = () => run(async () => {
-      await selectQueryHistory(session.session_id);
-      switchToTab("delivery");
-    });
-    row.appendChild(main);
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "history-delete-btn";
-    deleteBtn.textContent = "删除";
-    deleteBtn.onclick = (event) => {
-      event.stopPropagation();
-      run(() => deleteQueryHistory(session.session_id));
-    };
-    row.appendChild(deleteBtn);
-    list.appendChild(row);
-  }
-  if (!entries.length) {
-    const empty = document.createElement("div");
-    empty.className = "scene-empty muted";
-    empty.textContent = "暂无可生成汇报的提问历史。请先在“查询执行”里生成并执行。";
-    list.appendChild(empty);
-  }
-  if (hint) {
-    hint.textContent = state.currentSession
-      ? `当前汇报目标：${state.currentSession.global_goal} · session=${state.currentSession.session_id}`
-      : "请选择一条已执行的提问历史后生成汇报产物。";
-  }
+  // Session records are the sole question-history source and are rendered in
+  // the left sidebar below the scene list. The query workspace does not repeat it.
 }
 
 function renderSessionHeader() {
@@ -3503,37 +3607,9 @@ function resetClothingFilters() {
   if (el("clothingMaxPrice")) el("clothingMaxPrice").value = "";
 }
 
-function syncArtifactDownload() {
-  const link = el("downloadArtifactBtn");
-  if (!link) return;
-  if (!state.currentArtifact?.download_url) {
-    link.classList.add("disabled");
-    link.href = "#";
-    link.removeAttribute("download");
-    return;
-  }
-  link.classList.remove("disabled");
-  link.href = `${state.backendBase}${state.currentArtifact.download_url}`;
-  link.setAttribute("download", state.currentArtifact.file_name || "deck.pptx");
-}
-
 function renderReportState() {
-  const slideView = el("slideView");
-  const deckView = el("deckView");
-  if (slideView) slideView.textContent = state.currentSlide ? pretty(state.currentSlide) : "";
   renderSlidePreview(state.currentSlide || null);
-  if (deckView) {
-    if (state.currentDeck || state.currentArtifact) {
-      deckView.textContent = pretty({
-        deck: state.currentDeck || null,
-        artifact: state.currentArtifact || null,
-      });
-    } else {
-      deckView.textContent = "";
-    }
-  }
-  syncArtifactDownload();
-  renderDeliveryHistory();
+  renderDeckHistoryControls();
 }
 
 async function loadReportStateForCurrentSession({ silent = false } = {}) {
@@ -3553,23 +3629,24 @@ async function loadReportStateForCurrentSession({ silent = false } = {}) {
   }
   state.currentSlide = payload?.slide || null;
   state.currentDeck = payload?.deck || null;
-  state.currentArtifact = payload?.artifact || null;
+  const reportPlans = Array.isArray(payload?.report_plans) ? payload.report_plans : [];
+  state.currentReportPlan = reportPlans[0] || null;
+  if (state.currentReportPlan) {
+    state.activeReportPageId = state.currentReportPlan.active_page_id || state.activeReportPageId || "";
+  } else {
+    state.activeReportPageId = "";
+  }
+  if (state.currentDeck) {
+    await hydrateDeckHistoryForDeck(state.currentDeck);
+  } else {
+    resetDeckHistoryState("");
+  }
   renderReportState();
+  renderReportWorkflow();
   renderSessions();
   renderScenes();
   renderSessionHeader();
   persistUiState();
-  if (!silent) {
-    if (state.currentArtifact?.file_name) {
-      setDeliveryActionHint(`已恢复已保存 PPT：${state.currentArtifact.file_name}`);
-    } else if (state.currentDeck?.deck_id) {
-      setDeliveryActionHint(`已恢复 Deck：${state.currentDeck.deck_id}`);
-    } else if (state.currentSlide?.slide_id) {
-      setDeliveryActionHint(`已恢复 Slide：${state.currentSlide.slide_id}`);
-    } else {
-      setDeliveryActionHint("当前会话还没有保存的汇报产物。");
-    }
-  }
   return payload;
 }
 
@@ -3599,15 +3676,10 @@ function bindTabs() {
 }
 
 function switchToTab(tabKey) {
-  const nextTab = VALID_TABS.has(tabKey) ? tabKey : "overview";
+  const nextTab = tabKey === "delivery" ? "query" : VALID_TABS.has(tabKey) ? tabKey : "overview";
   state.activeTab = nextTab;
   renderTabs();
   persistUiState();
-  if (state.activeTab === "delivery" && state.currentSession?.session_id) {
-    loadReportStateForCurrentSession({ silent: true }).catch((error) => {
-      console.warn("load report state failed", error);
-    });
-  }
   maybeAutoRecommendOnce();
 }
 
@@ -3704,6 +3776,7 @@ async function refreshQueryHistory({ sceneId = "" } = {}) {
       state.sessions.push(session);
     }
   }
+  renderSessions();
   renderQueryHistory();
   if (!state.currentSession && historySessions.length) {
     const desiredSessionId = String(state.restoreSessionId || "").trim();
@@ -3747,14 +3820,12 @@ async function selectQueryHistory(sessionId) {
     el("queryPlanView").textContent = "";
   }
   if (entry?.query_run) {
-    el("queryRunView").textContent = formatQueryRunView(entry.query_run);
-    renderQueryTable(entry.query_run.result_preview || []);
+    renderQueryRunViews(entry.query_run);
     if (el("querySaveHint")) {
       el("querySaveHint").textContent = `已加载历史：${id}`;
     }
   } else {
-    if (el("queryRunView")) el("queryRunView").textContent = "";
-    renderQueryTable([]);
+    renderQueryRunViews(null);
     if (el("querySaveHint")) {
       el("querySaveHint").textContent = "该历史尚无 SQL 执行结果。";
     }
@@ -3771,7 +3842,7 @@ async function deleteQueryHistory(sessionId) {
   const entry = getHistoryEntryBySessionId(id);
   const session = getHistorySession(entry) || state.sessions.find((item) => item.session_id === id);
   const title = session?.global_goal ? `“${session.global_goal}”` : id;
-  const ok = window.confirm(`确认删除提问历史 ${title}？相关 SQL、Slide、Deck 记录会一起删除。`);
+  const ok = window.confirm(`确认删除会话 ${title}？相关 SQL、Slide、Deck 记录会一起删除。`);
   if (!ok) return;
   await api(`/api/v1/analysis/sessions/${id}`, { method: "DELETE" });
   if (state.currentSession?.session_id === id) {
@@ -3797,9 +3868,11 @@ async function loadLatestSqlResultForCurrentSession({ force = false } = {}) {
   const requestedSessionId = state.currentSession.session_id;
   const queryPlanView = el("queryPlanView");
   const queryRunView = el("queryRunView");
+  const queryRunInfoView = el("queryRunInfoView");
   const hasVisibleSqlResult = Boolean(
     (queryPlanView?.textContent || "").trim() ||
       (queryRunView?.textContent || "").trim() ||
+      (queryRunInfoView?.textContent || "").trim() ||
       (el("queryTableWrap")?.innerHTML || "").trim(),
   );
   if (hasVisibleSqlResult && !force) return;
@@ -3815,8 +3888,7 @@ async function loadLatestSqlResultForCurrentSession({ force = false } = {}) {
     el("queryPlanView").textContent = formatQueryPlanView(latest.query_plan);
   }
   if (latest?.query_run) {
-    if (el("queryRunView")) el("queryRunView").textContent = formatQueryRunView(latest.query_run);
-    renderQueryTable(latest.query_run.result_preview || []);
+    renderQueryRunViews(latest.query_run);
   }
 }
 
@@ -4309,14 +4381,15 @@ async function createSession() {
   await refreshSessions({ preferredSessionId: session.session_id });
   await refreshQueryHistory({ sceneId: session.scene_id });
   fillIntentInputs(goal || state.currentSession?.global_goal || "");
-  syncArtifactDownload();
 }
 
 async function generateSqlFromIntent() {
   const intent = (el("queryIntentInput")?.value || "").trim();
   if (!intent) throw new Error("请先输入业务问题");
   fillIntentInputs(intent);
-  const session = await createSessionForCurrentScene({ intent });
+  const session = state.currentSession?.session_id && state.currentSession.scene_id === state.currentSceneId
+    ? state.currentSession
+    : await ensureSessionForCurrentScene({ intent });
   if (!session) throw new Error("请先选择场景");
   await refreshSessions({ preferredSessionId: session.session_id });
   await refreshQueryHistory({ sceneId: session.scene_id });
@@ -4357,9 +4430,8 @@ async function executeQuery() {
   const sceneId = state.currentSession.scene_id;
   const queryRun = await api(`/api/v1/analysis/sessions/${state.currentSession.session_id}/current-query/execute`, { method: "POST" });
   if (!isCurrentSessionId(sessionId)) return;
-  el("queryRunView").textContent = formatQueryRunView(queryRun);
-  renderQueryTable(queryRun.result_preview || []);
-  if (el("querySaveHint")) el("querySaveHint").textContent = `已保存到提问历史：${state.currentSession.session_id}`;
+  renderQueryRunViews(queryRun);
+  if (el("querySaveHint")) el("querySaveHint").textContent = `已保存到会话：${state.currentSession.session_id}`;
   state.restoreSessionId = sessionId;
   const localSession = {
     ...state.currentSession,
@@ -4407,7 +4479,7 @@ async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {})
       && state.fieldResolution.analysis.terms.length > 0;
     if (hasFieldResolutionTerms) {
       if (el("querySaveHint")) {
-        el("querySaveHint").textContent = "字段已自动识别并默认选中，请人工点击“确认并生成SQL”执行。";
+        el("querySaveHint").textContent = "字段已自动识别并默认选中；请先完成 PPT 大纲审核，再按页面生成 SQL。";
       }
       return;
     }
@@ -4434,7 +4506,7 @@ async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {})
     : 0;
   switchToTab("query");
   clearQueryResultViews();
-  if (el("querySaveHint")) el("querySaveHint").textContent = "执行中，完成后会自动保存到提问历史。";
+  if (el("querySaveHint")) el("querySaveHint").textContent = "执行中，完成后会自动保存到会话。";
   const priceBandControlsEnabled = shouldShowPriceBandControls(intent);
   const selectedPresetIsStalePriceBand =
     state.selectedPresetKey && isPriceBandIntent(state.selectedPresetQuestion) && !isPriceBandIntent(intent);
@@ -4492,16 +4564,25 @@ async function runSqlResultAgentFromConfig({ skipFieldResolution = false } = {})
     el("queryPlanView").textContent = formatQueryPlanView(result.query_plan);
   }
   if (result?.query_run) {
-    el("queryRunView").textContent = formatQueryRunView(result.query_run);
-    renderQueryTable(result.query_run.result_preview || []);
+    renderQueryRunViews(result.query_run);
     if (el("querySaveHint")) {
       el("querySaveHint").textContent = result.saved
-        ? `已保存到提问历史：${session.session_id}`
+        ? `已保存到会话：${session.session_id}`
         : "执行完成，但未返回可保存的 SQL 结果。";
     }
   }
   await refreshSessions({ preferredSessionId: session.session_id });
   await refreshQueryHistory({ sceneId: resultSceneId });
+  await loadReportStateForCurrentSession({ silent: true }).catch((error) => {
+    console.warn("refresh report state after sql result failed", error);
+  });
+  if (result?.deck_error) {
+    const deckErrorMessage = `SQL 已执行，但写入 PPT 失败：${result.deck_error}`;
+    if (el("querySaveHint")) {
+      const currentHint = String(el("querySaveHint").textContent || "").trim();
+      el("querySaveHint").textContent = currentHint ? `${currentHint}；${deckErrorMessage}` : deckErrorMessage;
+    }
+  }
 }
 
 async function withButtonBusy(buttonId, busyText, fn) {
@@ -4521,71 +4602,38 @@ async function withButtonBusy(buttonId, busyText, fn) {
   }
 }
 
-async function loadSlide() {
-  return withButtonBusy("loadSlideBtn", "生成中...", async () => {
-    ensureReportSession();
-    const scheme = getSelectedPptScheme();
-    setDeliveryActionHint("正在生成 Slide 预览...");
-    const slide = await withSessionRecovery(
-      (session) => api(`/api/v1/analysis/sessions/${session.session_id}/current-slide?scheme=${encodeURIComponent(scheme)}`),
-      { createIfMissing: false, intent: getCurrentIntentText() },
-    );
-    state.currentSlide = slide;
-    renderReportState();
-    setDeliveryActionHint(`已生成 Slide 预览：${slide.slide_id}`);
-    persistUiState();
-    renderDeliveryHistory();
+async function switchDeckRevision(revisionId) {
+  const deckId = getCurrentDeckId();
+  if (!deckId) {
+    throw new Error("当前没有可操作的 Deck");
+  }
+  await api(`/api/v1/decks/${encodeURIComponent(deckId)}/revisions/${encodeURIComponent(revisionId)}/switch`, {
+    method: "POST",
   });
+  await loadReportStateForCurrentSession({ silent: true });
 }
 
-async function regenerateSlide() {
-  return withButtonBusy("regenerateSlideBtn", "重生成中...", async () => {
+async function undoDeckRevision() {
+  return withButtonBusy("deckUndoBtn", "回撤中...", async () => {
     ensureReportSession();
-    const scheme = getSelectedPptScheme();
-    setDeliveryActionHint("正在重生成 Slide...");
-    const slide = await withSessionRecovery(
-      (session) => api(`/api/v1/analysis/sessions/${session.session_id}/current-slide/regenerate`, {
-        method: "POST",
-        body: JSON.stringify({ scheme }),
-      }),
-      { createIfMissing: false, intent: getCurrentIntentText() },
-    );
-    state.currentSlide = slide;
-    renderReportState();
-    setDeliveryActionHint(`已重生成 Slide：${slide.slide_id}`);
-    renderDeliveryHistory();
-  });
-}
-
-async function approveSlide() {
-  return withButtonBusy("approveSlideBtn", "入Deck中...", async () => {
-    ensureReportSession();
-    setDeliveryActionHint("正在批准当前 Slide 入 Deck...");
-    state.currentDeck = await withSessionRecovery(
-      (session) => api(`/api/v1/analysis/sessions/${session.session_id}/current-slide/approve`, { method: "POST" }),
-      { createIfMissing: false, intent: getCurrentIntentText() },
-    );
-    await refreshSessions();
-    await refreshQueryHistory();
-    await loadReportStateForCurrentSession({ silent: true });
-    setDeliveryActionHint(`已批准入 Deck：${state.currentDeck?.deck_id || "-"}`);
-  });
-}
-
-async function exportDeck() {
-  return withButtonBusy("exportDeckBtn", "导出中...", async () => {
-    ensureReportSession();
-    setDeliveryActionHint("正在导出 PPT...");
-    if (!state.currentDeck) {
-      await loadDeckForCurrentSession();
+    await hydrateDeckHistoryForDeck(state.currentDeck);
+    const targetRevisionId = String(state.deckUndoStack[state.deckUndoStack.length - 1] || "").trim();
+    if (!targetRevisionId) {
+      throw new Error("没有可回撤的 Deck 版本");
     }
-    ensureDeck();
-    state.currentArtifact = await api(`/api/v1/decks/${state.currentDeck.deck_id}/export`, { method: "POST" });
-    await refreshSessions();
-    await refreshQueryHistory();
-    await loadReportStateForCurrentSession({ silent: true });
-    const fileName = state.currentArtifact?.file_name || "PPT";
-    setDeliveryActionHint(`已导出 PPT：${fileName}。可点击“下载PPT”。`);
+    await switchDeckRevision(targetRevisionId);
+  });
+}
+
+async function redoDeckRevision() {
+  return withButtonBusy("deckRedoBtn", "前进中...", async () => {
+    ensureReportSession();
+    await hydrateDeckHistoryForDeck(state.currentDeck);
+    const targetRevisionId = String(state.deckRedoStack[state.deckRedoStack.length - 1] || "").trim();
+    if (!targetRevisionId) {
+      throw new Error("没有可前进的 Deck 版本");
+    }
+    await switchDeckRevision(targetRevisionId);
   });
 }
 
@@ -4603,7 +4651,6 @@ function fillSlideEditor(slide) {
   const findingsInput = el("slideFindingsInput");
   const narrativeInput = el("slideNarrativeInput");
   const recommendationsInput = el("slideRecommendationsInput");
-  const hint = el("slideEditHint");
   if (!titleInput || !subtitleInput || !chartTypeSelect || !findingsInput || !narrativeInput || !recommendationsInput) return;
 
   const hasSlide = Boolean(slide);
@@ -4620,15 +4667,10 @@ function fillSlideEditor(slide) {
   findingsInput.value = Array.isArray(slide?.findings) ? slide.findings.join("\n") : "";
   narrativeInput.value = slide?.narrative || "";
   recommendationsInput.value = Array.isArray(slide?.recommendations) ? slide.recommendations.join("\n") : "";
-  if (hint) {
-    hint.textContent = hasSlide
-      ? `当前稿：${slide.slide_id} · version=${slide.version || 1}`
-      : "生成预览后可编辑标题、结论、说明、建议和图表类型。";
-  }
 }
 
 function readSlideEditorPayload() {
-  if (!state.currentSlide) throw new Error("请先生成 Slide 预览");
+  if (!state.currentSlide) throw new Error("请先生成 SQL 结果");
   const chartSpec = {
     ...(state.currentSlide.chart_spec || {}),
     chart_type: String(el("slideChartTypeSelect")?.value || state.currentSlide.chart_spec?.chart_type || "table"),
@@ -4647,14 +4689,12 @@ async function saveSlideEdits() {
   return withButtonBusy("saveSlideEditBtn", "保存中...", async () => {
     ensureReportSession();
     const payload = readSlideEditorPayload();
-    setDeliveryActionHint("正在保存 Slide 编辑...");
     const slide = await api(`/api/v1/analysis/sessions/${state.currentSession.session_id}/current-slide`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
     state.currentSlide = slide;
-    renderReportState();
-    setDeliveryActionHint(`已保存 Slide 编辑：${slide.slide_id} · version=${slide.version || 1}`);
+    await loadReportStateForCurrentSession({ silent: true });
   });
 }
 
@@ -4675,118 +4715,483 @@ function ensureReportSession() {
   return state.currentSession;
 }
 
-function ensureDeck() {
-  if (!state.currentDeck) throw new Error("请先批准 Slide 入 Deck");
+function toChartNumber(value) {
+  const normalized = String(value ?? "").replaceAll(",", "").trim();
+  if (!normalized) return null;
+  const numeric = Number(normalized.endsWith("%") ? normalized.slice(0, -1) : normalized);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
-function getSelectedPptScheme() {
-  const selected = String(el("pptSchemeSelect")?.value || state.pptScheme || "presenton_ai").trim();
-  state.pptScheme = selected || "presenton_ai";
-  persistUiState();
-  return state.pptScheme;
-}
+function getPptChartEntries(slide) {
+  const chartSpec = slide?.chart_spec && typeof slide.chart_spec === "object" ? slide.chart_spec : {};
+  const rows = Array.isArray(chartSpec.rows) ? chartSpec.rows.filter((row) => row && typeof row === "object") : [];
+  if (!rows.length) return [];
 
-function renderPptSchemeOptions() {
-  const select = el("pptSchemeSelect");
-  if (!select) return;
-  const grouped = new Map();
-  for (const item of state.pptSchemes) {
-    const category = item.category || "其他方案";
-    if (!grouped.has(category)) grouped.set(category, []);
-    grouped.get(category).push(item);
-  }
-  select.innerHTML = Array.from(grouped.entries())
-    .map(([category, items]) => {
-      const options = items
-        .map((item) => `<option value="${escapeHtml(item.scheme)}">${escapeHtml(item.name || item.scheme)}</option>`)
-        .join("");
-      return `<optgroup label="${escapeHtml(category)}">${options}</optgroup>`;
+  const columns = Object.keys(rows[0]);
+  const preferredMetric = String(chartSpec.y_field || "").trim();
+  const metricColumn = columns.includes(preferredMetric) && rows.some((row) => toChartNumber(row[preferredMetric]) !== null)
+    ? preferredMetric
+    : columns.find((column) => rows.some((row) => toChartNumber(row[column]) !== null));
+  if (!metricColumn) return [];
+
+  const categoryColumns = columns.filter((column) => column !== metricColumn);
+  const preferredLabel = String(chartSpec.x_field || chartSpec.label_field || "").trim();
+  const categoryColumn = (columns.includes(preferredLabel) ? preferredLabel : "") || categoryColumns
+    .map((column) => ({ column, distinct: new Set(rows.map((row) => String(row[column] ?? "").trim()).filter(Boolean)).size }))
+    .sort((left, right) => right.distinct - left.distinct)[0]?.column;
+  const priceBandColumn = categoryColumns.find((column) => /价格带|价格区间|价位/.test(column));
+  const subCategoryColumn = categoryColumns.find((column) => /二级类目|子类目|品类/.test(column));
+
+  const chartType = String(chartSpec.chart_type || "bar").toLowerCase();
+  const entries = rows
+    .map((row, index) => {
+      const value = toChartNumber(row[metricColumn]);
+      if (value === null) return null;
+      const labelParts = [subCategoryColumn ? row[subCategoryColumn] : "", priceBandColumn ? row[priceBandColumn] : ""]
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean);
+      const label = labelParts.length ? labelParts.join(" · ") : String(row[categoryColumn] ?? `数据 ${index + 1}`).trim();
+      return { label: label || `数据 ${index + 1}`, value, rawValue: String(row[metricColumn] ?? value) };
     })
-    .join("");
-  if (!state.pptSchemes.find((item) => item.scheme === state.pptScheme)) {
-    state.pptScheme = state.pptSchemes[0]?.scheme || "presenton_ai";
-  }
-  select.value = state.pptScheme;
-  renderPptSchemeHint();
+    .filter(Boolean);
+  if (!["line", "area", "scatter"].includes(chartType)) entries.sort((left, right) => right.value - left.value);
+  return entries.slice(0, Number(chartSpec.max_rows || 10) || 10);
 }
 
-function renderPptSchemeHint() {
-  const hint = el("pptSchemeHint");
-  if (!hint) return;
-  const scheme = state.pptSchemes.find((item) => item.scheme === state.pptScheme);
-  hint.textContent = scheme
-    ? `${scheme.category ? `${scheme.category} / ` : ""}${scheme.name}：${scheme.description}${scheme.reference ? `（参考：${scheme.reference}）` : ""}`
-    : "选择不同方案后生成预览，可对比标题、结论、关键数据点和建议。";
+function getPptChartType(slide) {
+  const value = String(slide?.chart_spec?.chart_type || "bar").trim().toLowerCase();
+  return ["bar", "column", "line", "area", "pie", "ring", "radar", "scatter", "table", "none"].includes(value) ? value : "bar";
 }
 
-async function loadPptSchemes() {
-  try {
-    const schemes = await api("/api/v1/analysis/sessions/-/ppt-schemes");
-    if (Array.isArray(schemes) && schemes.length) {
-      state.pptSchemes = schemes.map((item) => ({
-        scheme: String(item.scheme || "").trim(),
-        name: String(item.name || item.scheme || "").trim(),
-        description: String(item.description || "").trim(),
-        category: String(item.category || "").trim(),
-        reference: String(item.reference || "").trim(),
-      })).filter((item) => item.scheme);
-    }
-  } catch (error) {
-    console.warn("load ppt schemes failed", error);
-  }
-  renderPptSchemeOptions();
+function pptPalette(index) {
+  return ["#2877e3", "#25a18e", "#ef8f3a", "#8157df", "#e45489", "#36a5d6", "#7ea51b", "#cf6b3b"][index % 8];
+}
+
+function renderPptLineChart(entries, type) {
+  const width = 760;
+  const height = 270;
+  const max = Math.max(...entries.map((entry) => entry.value), 1);
+  const min = Math.min(...entries.map((entry) => entry.value), 0);
+  const range = Math.max(max - min, 1);
+  const points = entries.map((entry, index) => {
+    const x = entries.length === 1 ? width / 2 : 42 + (index * (width - 84)) / (entries.length - 1);
+    const y = 28 + ((max - entry.value) / range) * (height - 76);
+    return { ...entry, x, y };
+  });
+  const path = points.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+  const area = `${path} L${points.at(-1)?.x || 0},${height - 38} L${points[0]?.x || 0},${height - 38} Z`;
+  return `<div class="ppt-line-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${type}图">
+    <line x1="42" y1="${height - 38}" x2="${width - 42}" y2="${height - 38}" class="ppt-axis" />
+    <line x1="42" y1="28" x2="42" y2="${height - 38}" class="ppt-axis" />
+    ${type === "area" ? `<path d="${area}" class="ppt-area-fill" />` : ""}
+    <path d="${path}" class="ppt-line-path" />
+    ${points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" class="ppt-line-dot"><title>${escapeHtml(`${point.label}: ${point.rawValue}`)}</title></circle>`).join("")}
+    ${points.map((point) => `<text x="${point.x}" y="${height - 14}" text-anchor="middle" class="ppt-line-label">${escapeHtml(point.label.slice(0, 9))}</text>`).join("")}
+  </svg></div>`;
+}
+
+function renderPptPieChart(entries, type) {
+  const total = entries.reduce((sum, entry) => sum + entry.value, 0) || 1;
+  let cursor = 0;
+  const stops = entries.map((entry, index) => {
+    const next = cursor + (entry.value / total) * 100;
+    const stop = `${pptPalette(index)} ${cursor.toFixed(2)}% ${next.toFixed(2)}%`;
+    cursor = next;
+    return stop;
+  });
+  return `<div class="ppt-pie-layout"><div class="ppt-pie ${type === "ring" ? "ring" : ""}" style="background:conic-gradient(${stops.join(",")})"></div>
+    <div class="ppt-pie-legend">${entries.map((entry, index) => `<div><i style="background:${pptPalette(index)}"></i><span>${escapeHtml(entry.label)}</span><strong>${escapeHtml(entry.rawValue)}</strong></div>`).join("")}</div></div>`;
+}
+
+function renderPptTable(slide) {
+  const rows = Array.isArray(slide?.chart_spec?.rows) ? slide.chart_spec.rows.slice(0, Number(slide?.chart_spec?.max_rows || 10)) : [];
+  const columns = rows.length ? Object.keys(rows[0]) : [];
+  if (!columns.length) return `<div class="slide-preview-empty">暂无可展示的数据。</div>`;
+  return `<div class="ppt-table-wrap"><table class="ppt-table"><thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row?.[column] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
 function renderSlidePreview(slide) {
   const wrap = el("slidePreview");
   if (!wrap) return;
   if (!slide) {
-    wrap.innerHTML = `<div class="slide-preview-empty">暂无 Slide。请选择方案后点击生成预览。</div>`;
-    fillSlideEditor(null);
+    wrap.innerHTML = `<div class="slide-preview-empty">暂无 PPT 产物。生成查询后会自动创建。</div>`;
     return;
   }
-  fillSlideEditor(slide);
-  const schemeName = slide.lineage_summary?.ppt_scheme_name || slide.chart_spec?.ppt_scheme_name || "PPT方案";
-  const keyMetrics = Array.isArray(slide.lineage_summary?.key_metrics) ? slide.lineage_summary.key_metrics : [];
-  const findings = Array.isArray(slide.findings) ? slide.findings : [];
-  const recommendations = Array.isArray(slide.recommendations) ? slide.recommendations : [];
-  const rows = Array.isArray(slide.chart_spec?.rows) ? slide.chart_spec.rows.slice(0, 5) : [];
-  const columns = rows.length ? Object.keys(rows[0]).slice(0, 5) : [];
-  const metricsHtml = keyMetrics.length
-    ? keyMetrics
+  const entries = getPptChartEntries(slide);
+  const chartType = getPptChartType(slide);
+  const maxValue = Math.max(...entries.map((entry) => entry.value), 1);
+  let chartHtml = entries.length
+    ? `<div class="ppt-chart" role="img" aria-label="PPT 图表预览">${entries
         .map(
-          (item) =>
-            `<div class="slide-preview-metric"><strong>${escapeHtml(item.value ?? "-")}</strong><span>${escapeHtml(item.label ?? "-")}</span></div>`,
+          (entry) => `<div class="ppt-chart-row">
+            <span class="ppt-chart-label" title="${escapeHtml(entry.label)}">${escapeHtml(entry.label)}</span>
+            <span class="ppt-chart-track"><span class="ppt-chart-bar" style="width:${Math.max(3, (entry.value / maxValue) * 100)}%"></span></span>
+            <strong class="ppt-chart-value">${escapeHtml(entry.rawValue)}</strong>
+          </div>`,
         )
-        .join("")
-    : `<div class="slide-preview-metric"><strong>-</strong><span>暂无关键数据点</span></div>`;
-  const chartHtml = rows.length
-    ? `<table><thead><tr>${columns.map((col) => `<th>${escapeHtml(col)}</th>`).join("")}</tr></thead><tbody>${rows
-        .map((row) => `<tr>${columns.map((col) => `<td>${escapeHtml(row[col] ?? "")}</td>`).join("")}</tr>`)
-        .join("")}</tbody></table>`
-    : `<p class="muted">暂无可预览数据，导出时会保留文字结论。</p>`;
+        .join("")}</div>`
+    : `<div class="slide-preview-empty">暂无可展示的 PPT 图表数据。</div>`;
+  if (chartType === "line" || chartType === "area" || chartType === "scatter") chartHtml = entries.length ? renderPptLineChart(entries, chartType) : chartHtml;
+  if (chartType === "pie" || chartType === "ring") chartHtml = entries.length ? renderPptPieChart(entries, chartType) : chartHtml;
+  if (chartType === "table") chartHtml = renderPptTable(slide);
+  if (chartType === "none") chartHtml = "";
+  const findings = Array.isArray(slide.findings) ? slide.findings.filter(Boolean) : [];
+  const insightHtml = findings.length || slide.narrative
+    ? `<div class="ppt-insight">${findings.length ? `<ul>${findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}${slide.narrative ? `<p>${escapeHtml(slide.narrative)}</p>` : ""}</div>`
+    : "";
   wrap.innerHTML = `
-    <div class="slide-preview-head">
-      <div class="slide-preview-kicker">${escapeHtml(schemeName)} · ${escapeHtml(slide.page_type || "-")}</div>
-      <h3 class="slide-preview-title">${escapeHtml(slide.title || "未命名页面")}</h3>
-      <div class="slide-preview-subtitle">${escapeHtml(slide.subtitle || "")}</div>
-    </div>
-    <div class="slide-preview-metrics">${metricsHtml}</div>
-    <div class="slide-preview-body">
-      <section class="slide-preview-section">
-        <h4>核心结论</h4>
-        <ul>${findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>暂无结论</li>"}</ul>
-        <h4>业务解释</h4>
-        <p>${escapeHtml(slide.narrative || "暂无说明")}</p>
-      </section>
-      <section class="slide-preview-section">
-        <h4>图表 / 数据预览：${escapeHtml(slide.chart_spec?.chart_type || "-")}</h4>
-        <div class="slide-preview-chart">${chartHtml}</div>
-        <h4>下一步建议</h4>
-        <ul>${recommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>暂无建议</li>"}</ul>
-      </section>
+    <div class="slide-preview-visual" aria-label="PPT 图表预览">
+      <div class="ppt-slide-title-block"><h4>${escapeHtml(slide.title || "未命名页面")}</h4>${slide.subtitle ? `<p>${escapeHtml(slide.subtitle)}</p>` : ""}</div>
+      ${chartHtml}${insightHtml}
     </div>
   `;
+}
+
+function getActiveReportPage() {
+  const plan = state.currentReportPlan;
+  if (!plan || !Array.isArray(plan.pages)) return null;
+  const pageId = state.activeReportPageId || plan.active_page_id;
+  return plan.pages.find((page) => page.page_id === pageId) || plan.pages[0] || null;
+}
+
+function replaceReportPage(page) {
+  if (!state.currentReportPlan || !page?.page_id) return;
+  const pages = Array.isArray(state.currentReportPlan.pages) ? state.currentReportPlan.pages : [];
+  const index = pages.findIndex((item) => item.page_id === page.page_id);
+  if (index >= 0) pages[index] = page;
+  else pages.push(page);
+  state.currentReportPlan.pages = pages.sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
+  state.activeReportPageId = page.page_id;
+  state.currentReportPlan.active_page_id = page.page_id;
+}
+
+function applyReportPlan(payload) {
+  const plan = payload?.report_plan || payload;
+  if (!plan?.report_plan_id) return null;
+  state.currentReportPlan = plan;
+  state.activeReportPageId = plan.active_page_id || state.activeReportPageId || plan.pages?.[0]?.page_id || "";
+  return plan;
+}
+
+function reportStageLabel(stage) {
+  return {
+    outline_draft: "待审核大纲",
+    sql_draft: "待生成 SQL",
+    sql_ready: "待审核 SQL",
+    data_ready: "待校验数据",
+    chart_ready: "待生成洞察",
+    insight_ready: "待确认结论",
+    approved: "已写入 PPT",
+  }[stage] || "待处理";
+}
+
+function reportPlanStep(plan, page) {
+  if (!plan) return "outline";
+  if (plan.status === "draft") return "outline";
+  if (plan.status === "ready_to_export" || plan.status === "exported") return "delivery";
+  const stage = page?.stage || "sql_draft";
+  if (["sql_draft", "sql_ready"].includes(stage)) return "sql";
+  if (["data_ready", "chart_ready"].includes(stage)) return "chart";
+  return "insight";
+}
+
+function fieldsForReportPage(page) {
+  const planScope = state.currentReportPlan?.analysis_scope || {};
+  const rows = Array.isArray(page?.result_preview) ? page.result_preview : [];
+  const rowFields = rows.length && rows[0] && typeof rows[0] === "object" ? Object.keys(rows[0]) : [];
+  return [...new Set([
+    ...(planScope.available_metrics || []),
+    ...(planScope.available_dimensions || []),
+    ...(planScope.available_time_fields || []),
+    ...(page?.metrics || []),
+    ...(page?.dimensions || []),
+    ...rowFields,
+  ].map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function reportFieldOptions(fields, selected, placeholder = "请选择字段") {
+  const value = String(selected || "");
+  const options = [`<option value="">${escapeHtml(placeholder)}</option>`];
+  [...new Set([...fields, value].filter(Boolean))].forEach((field) => {
+    options.push(`<option value="${escapeHtml(field)}" ${field === value ? "selected" : ""}>${escapeHtml(field)}</option>`);
+  });
+  return options.join("");
+}
+
+function reportFilterText(page) {
+  const filters = Array.isArray(page?.filters) ? page.filters : [];
+  return filters.map((item) => typeof item === "string" ? item : item?.expression || item?.label || JSON.stringify(item)).filter(Boolean).join("；");
+}
+
+function reportPageToSlide(page) {
+  const sourceRows = Array.isArray(page.result_preview) ? page.result_preview : [];
+  const filters = Array.isArray(page.chart_binding?.filters) ? page.chart_binding.filters : [];
+  const rows = sourceRows.filter((row) => filters.every((filter) => {
+    const expression = String(typeof filter === "string" ? filter : filter?.expression || "").trim();
+    if (!expression) return true;
+    const match = expression.match(/^\s*([^=<>！!]+?)\s*(?:=|==|包含)\s*(.+?)\s*$/);
+    if (!match) return true;
+    const field = match[1].trim();
+    const expected = match[2].trim().replace(/^['\"]|['\"]$/g, "");
+    const actual = String(row?.[field] ?? "").trim();
+    return actual.includes(expected);
+  }));
+  return {
+    title: page.title,
+    subtitle: page.table_header,
+    findings: page.findings || [],
+    narrative: page.narrative || "",
+    chart_spec: {
+      chart_type: page.chart_binding?.chart_type || "bar",
+      x_field: page.chart_binding?.label_field || "",
+      y_field: page.chart_binding?.value_fields?.[0] || "",
+      max_rows: page.chart_binding?.max_rows || 12,
+      rows,
+    },
+  };
+}
+
+function renderReportWorkflow() {
+  const card = el("reportWorkflowCard");
+  const list = el("reportPageList");
+  const workspace = el("reportPageWorkspace");
+  const confirmBtn = el("confirmReportOutlineBtn");
+  const reopenBtn = el("reopenReportOutlineBtn");
+  const exportBtn = el("exportReportPptxBtn");
+  const addBtn = el("addReportPageBtn");
+  const hint = el("reportWorkflowHint");
+  const plan = state.currentReportPlan;
+  if (!card || !list || !workspace) return;
+  card.hidden = !plan;
+  if (!plan) {
+    list.innerHTML = "";
+    workspace.innerHTML = "";
+    return;
+  }
+  const page = getActiveReportPage();
+  if (!page) {
+    workspace.innerHTML = `<p class="muted">当前报告还没有页面。</p>`;
+    return;
+  }
+  state.activeReportPageId = page.page_id;
+  if (hint) hint.textContent = `报告会话：${plan.title || plan.intent} · ${plan.pages?.length || 0} 页 · ${plan.status === "draft" ? "请先审核大纲" : "按页推进并可随时回到前一阶段"}`;
+  if (confirmBtn) {
+    confirmBtn.hidden = plan.status !== "draft";
+    confirmBtn.disabled = plan.status !== "draft";
+  }
+  if (reopenBtn) reopenBtn.hidden = plan.status === "draft";
+  if (exportBtn) {
+    exportBtn.hidden = !["ready_to_export", "exported"].includes(plan.status);
+    exportBtn.disabled = !["ready_to_export", "exported"].includes(plan.status);
+  }
+  if (addBtn) addBtn.disabled = plan.status !== "draft";
+
+  const activeStep = reportPlanStep(plan, page);
+  const stepOrder = ["outline", "sql", "chart", "insight", "delivery"];
+  document.querySelectorAll(".report-stage-flow [data-stage]").forEach((node) => {
+    const step = node.dataset.stage;
+    node.classList.toggle("active", step === activeStep);
+    node.classList.toggle("done", stepOrder.indexOf(step) < stepOrder.indexOf(activeStep));
+  });
+  list.innerHTML = plan.pages.map((item) => `<button type="button" class="report-page-item ${item.page_id === page.page_id ? "active" : ""}" data-report-page-id="${escapeHtml(item.page_id)}">
+      <small>第 ${Number(item.order || 0)} 页 · ${escapeHtml(item.page_kind === "text" ? "文字页" : item.chart_binding?.chart_type || "图表页")}</small>
+      <strong>${escapeHtml(item.title || "未命名页面")}</strong>
+      <em>${escapeHtml(reportStageLabel(item.stage))}</em>
+    </button>`).join("");
+  const fields = fieldsForReportPage(page);
+  const isOutline = plan.status === "draft";
+  const isTextPage = page.page_kind === "text";
+  const chartBinding = page.chart_binding || {};
+  const outlineHtml = `<div class="report-form-grid">
+      <label>页面标题<input id="reportPageTitleInput" value="${escapeHtml(page.title || "")}" ${isOutline ? "" : "readonly"}></label>
+      <label>页面类型<select id="reportPageKindInput" ${isOutline ? "" : "disabled"}>
+        <option value="text" ${isTextPage ? "selected" : ""}>文字总结页</option>
+        <option value="chart" ${page.page_kind === "chart" ? "selected" : ""}>图表页</option>
+        <option value="table" ${page.page_kind === "table" ? "selected" : ""}>表格页</option>
+      </select></label>
+      <label class="wide">页表头 / 图表标题<input id="reportPageHeaderInput" value="${escapeHtml(page.table_header || "")}" ${isOutline ? "" : "readonly"}></label>
+      <label class="wide">本页要回答的问题<textarea id="reportPageObjectiveInput" rows="2" ${isOutline ? "" : "readonly"}>${escapeHtml(page.objective || "")}</textarea></label>
+      <label>分析指标（逗号分隔）<input id="reportPageMetricsInput" value="${escapeHtml((page.metrics || []).join("，"))}" ${isOutline ? "" : "readonly"}></label>
+      <label>分析维度（逗号分隔）<input id="reportPageDimensionsInput" value="${escapeHtml((page.dimensions || []).join("，"))}" ${isOutline ? "" : "readonly"}></label>
+      <label>数据范围 / 时间<input id="reportPageTimeInput" value="${escapeHtml(page.time_window || "")}" placeholder="例如：2026年、最近30天" ${isOutline ? "" : "readonly"}></label>
+      <label>数据筛选<input id="reportPageFilterInput" value="${escapeHtml(reportFilterText(page))}" placeholder="例如：渠道=官网；品类=女装" ${isOutline ? "" : "readonly"}></label>
+      ${isTextPage ? "" : `<label>计划图表<select id="reportPageChartTypeInput" ${isOutline ? "" : "disabled"}>${["bar", "column", "line", "area", "pie", "ring", "radar", "scatter", "table"].map((type) => `<option value="${type}" ${chartBinding.chart_type === type ? "selected" : ""}>${({ bar: "条形图", column: "柱状图", line: "折线图", area: "面积图", pie: "饼图", ring: "环形图", radar: "雷达图", scatter: "散点图", table: "表格" })[type]}</option>`).join("")}</select></label>`}
+    </div>`;
+
+  let nextHtml = "";
+  if (isOutline) {
+    nextHtml = `<div class="report-page-actions"><button type="button" data-report-action="save-outline" class="secondary">保存本页大纲</button>${plan.pages.length > 1 ? `<button type="button" data-report-action="delete-page" class="secondary">删除本页</button>` : ""}</div>`;
+  } else if (isTextPage) {
+    nextHtml = `<textarea id="reportInsightInput" class="report-insight-editor" placeholder="填写或生成本页结论">${escapeHtml(page.narrative || "")}</textarea>
+      <div class="report-page-actions"><button type="button" data-report-action="generate-insight" class="secondary">生成结论</button><button type="button" data-report-action="save-insight" class="secondary">保存结论</button><button type="button" data-report-action="approve-page">确认本页并写入 PPT</button></div>`;
+  } else {
+    const hasSql = Boolean(page.sql);
+    const hasData = page.stage === "data_ready" || page.stage === "chart_ready" || page.stage === "insight_ready" || page.stage === "approved";
+    const hasChart = page.stage === "chart_ready" || page.stage === "insight_ready" || page.stage === "approved";
+    nextHtml = `<div class="report-page-actions"><button type="button" data-report-action="generate-sql" class="secondary">生成本页 SQL</button></div>
+      ${hasSql ? `<textarea id="reportPageSqlInput" class="report-sql-editor" spellcheck="false">${escapeHtml(page.sql)}</textarea><div class="report-page-actions"><button type="button" data-report-action="save-sql" class="secondary">保存 SQL 修改</button><button type="button" data-report-action="execute-sql">确认执行 SQL</button></div>` : `<p class="report-inline-note">本页 SQL 会严格按已确认的页面指标、维度、时间范围和筛选条件生成。</p>`}
+      ${hasData ? `<div class="report-form-grid report-chart-binding-grid"><label>图表类型<select id="reportBindingChartType">${["bar", "column", "line", "area", "pie", "ring", "radar", "scatter", "table"].map((type) => `<option value="${type}" ${chartBinding.chart_type === type ? "selected" : ""}>${({ bar: "条形图", column: "柱状图", line: "折线图", area: "面积图", pie: "饼图", ring: "环形图", radar: "雷达图", scatter: "散点图", table: "表格" })[type]}</option>`).join("")}</select></label><label>分类字段<select id="reportBindingLabelField">${reportFieldOptions(fields, chartBinding.label_field, "选择分类字段")}</select></label><label>数值字段<select id="reportBindingValueField">${reportFieldOptions(fields, chartBinding.value_fields?.[0], "选择数值字段")}</select></label><label>展示数据条数<input id="reportBindingMaxRows" type="number" min="1" max="100" value="${Number(chartBinding.max_rows || 12)}"></label><label class="wide">图表数据范围（可选，字段=值，以；分隔）<input id="reportBindingFilterInput" value="${escapeHtml(reportFilterText({ filters: chartBinding.filters || [] }))}" placeholder="例如：渠道=官网；品类=女装"></label></div><div class="report-page-actions"><button type="button" data-report-action="confirm-chart">确认图表与数据</button><button type="button" data-report-action="generate-sql" class="secondary">回到 SQL 重新拉数</button></div>` : ""}
+      ${hasChart ? `<textarea id="reportInsightInput" class="report-insight-editor" placeholder="基于真实数据生成或编辑本页洞察">${escapeHtml([...(page.findings || []), page.narrative || ""].filter(Boolean).join("\n"))}</textarea><div class="report-page-actions"><button type="button" data-report-action="generate-insight" class="secondary">基于数据生成洞察</button><button type="button" data-report-action="save-insight" class="secondary">保存结论</button><button type="button" data-report-action="approve-page">确认本页并写入 PPT</button></div>` : ""}`;
+  }
+  workspace.innerHTML = `<div class="section-head"><div><h4>第 ${Number(page.order || 0)} 页：${escapeHtml(page.title || "未命名页面")}<span class="report-page-stage">${escapeHtml(reportStageLabel(page.stage))}</span></h4><p class="muted">${escapeHtml(page.objective || "")}</p></div></div>${outlineHtml}${nextHtml}`;
+  if (Array.isArray(page.result_preview) && page.result_preview.length) renderSlidePreview(reportPageToSlide(page));
+}
+
+function readReportPagePatchFromDom() {
+  const split = (value) => String(value || "").split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+  const filterText = String(el("reportPageFilterInput")?.value || "").trim();
+  return {
+    title: String(el("reportPageTitleInput")?.value || "").trim(),
+    table_header: String(el("reportPageHeaderInput")?.value || "").trim(),
+    objective: String(el("reportPageObjectiveInput")?.value || "").trim(),
+    page_kind: el("reportPageKindInput")?.value || "chart",
+    metrics: split(el("reportPageMetricsInput")?.value),
+    dimensions: split(el("reportPageDimensionsInput")?.value),
+    time_window: String(el("reportPageTimeInput")?.value || "").trim(),
+    filters: filterText ? filterText.split(/[；;]/).map((expression) => ({ expression: expression.trim() })).filter((item) => item.expression) : [],
+    chart_binding: { chart_type: el("reportPageChartTypeInput")?.value || undefined },
+  };
+}
+
+function readReportChartBindingFromDom() {
+  const filterText = String(el("reportBindingFilterInput")?.value || "").trim();
+  return {
+    chart_type: el("reportBindingChartType")?.value || "bar",
+    label_field: el("reportBindingLabelField")?.value || "",
+    value_fields: [el("reportBindingValueField")?.value || ""].filter(Boolean),
+    max_rows: Number(el("reportBindingMaxRows")?.value || 12),
+    filters: filterText ? filterText.split(/[；;]/).map((expression) => ({ expression: expression.trim() })).filter((item) => item.expression) : [],
+  };
+}
+
+async function createReportPlanFromIntent() {
+  if (!state.currentSceneId) throw new Error("请先选择场景");
+  const intent = (el("queryIntentInput")?.value || el("goalInput")?.value || "").trim();
+  if (!intent) throw new Error("请先输入分析主题，例如：zara2026年商品数据分析");
+  fillIntentInputs(intent);
+  const session = state.currentSession?.session_id && state.currentSession.scene_id === state.currentSceneId
+    ? state.currentSession
+    : await ensureSessionForCurrentScene({ intent });
+  if (!session) throw new Error("创建报告会话失败");
+  const payload = await api(`/api/v1/analysis/sessions/${session.session_id}/report-plans`, {
+    method: "POST",
+    body: JSON.stringify({ intent }),
+  });
+  applyReportPlan(payload);
+  clearQueryResultViews();
+  renderReportWorkflow();
+  await refreshSessions({ preferredSessionId: session.session_id });
+}
+
+async function callReportAction(action) {
+  const sessionId = state.currentSession?.session_id;
+  const plan = state.currentReportPlan;
+  const page = getActiveReportPage();
+  if (!sessionId || !plan || !page) throw new Error("请先生成并选择一份 PPT 报告大纲");
+  const base = `/api/v1/analysis/sessions/${encodeURIComponent(sessionId)}/report-plans/${encodeURIComponent(plan.report_plan_id)}`;
+  if (action === "save-outline") {
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}`, { method: "PATCH", body: JSON.stringify(readReportPagePatchFromDom()) });
+    applyReportPlan(result);
+  } else if (action === "delete-page") {
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}`, { method: "DELETE" });
+    applyReportPlan(result);
+  } else if (action === "generate-sql") {
+    const chartRangeText = String(el("reportBindingFilterInput")?.value || "").trim();
+    if (chartRangeText) {
+      const filters = chartRangeText.split(/[；;]/).map((expression) => ({ expression: expression.trim() })).filter((item) => item.expression);
+      const updated = await api(`${base}/pages/${encodeURIComponent(page.page_id)}`, { method: "PATCH", body: JSON.stringify({ filters }) });
+      applyReportPlan(updated);
+    }
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}/generate-sql`, { method: "POST" });
+    replaceReportPage(result.page);
+  } else if (action === "save-sql") {
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}/sql`, { method: "PUT", body: JSON.stringify({ sql: el("reportPageSqlInput")?.value || "", sql_explanation: page.sql_explanation || "" }) });
+    replaceReportPage(result.page);
+  } else if (action === "execute-sql") {
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}/execute`, { method: "POST" });
+    replaceReportPage(result.page);
+    renderQueryRunViews(result.query_run);
+  } else if (action === "confirm-chart") {
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}/confirm-chart`, { method: "POST", body: JSON.stringify({ chart_binding: readReportChartBindingFromDom() }) });
+    replaceReportPage(result.page);
+  } else if (action === "generate-insight") {
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}/generate-insight`, { method: "POST" });
+    replaceReportPage(result.page);
+  } else if (action === "save-insight") {
+    const raw = String(el("reportInsightInput")?.value || "").trim();
+    const lines = raw.split("\n").map((item) => item.trim()).filter(Boolean);
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}/insight`, { method: "PUT", body: JSON.stringify({ findings: lines.slice(0, -1), narrative: lines.at(-1) || "" }) });
+    replaceReportPage(result.page);
+  } else if (action === "approve-page") {
+    const result = await api(`${base}/pages/${encodeURIComponent(page.page_id)}/approve`, { method: "POST" });
+    replaceReportPage(result.page);
+    state.currentDeck = result.deck || state.currentDeck;
+    state.currentSlide = result.slide || state.currentSlide;
+    await loadReportStateForCurrentSession({ silent: true });
+  }
+  renderReportWorkflow();
+}
+
+async function confirmReportOutline() {
+  const sessionId = state.currentSession?.session_id;
+  const plan = state.currentReportPlan;
+  if (!sessionId || !plan) throw new Error("请先生成 PPT 大纲");
+  const result = await api(`/api/v1/analysis/sessions/${encodeURIComponent(sessionId)}/report-plans/${encodeURIComponent(plan.report_plan_id)}/confirm-outline`, { method: "POST" });
+  applyReportPlan(result);
+  renderReportWorkflow();
+}
+
+async function reopenReportOutline() {
+  const sessionId = state.currentSession?.session_id;
+  const plan = state.currentReportPlan;
+  if (!sessionId || !plan) throw new Error("请先生成 PPT 大纲");
+  const result = await api(`/api/v1/analysis/sessions/${encodeURIComponent(sessionId)}/report-plans/${encodeURIComponent(plan.report_plan_id)}/reopen-outline`, { method: "POST" });
+  applyReportPlan(result);
+  renderReportWorkflow();
+}
+
+async function addReportPage() {
+  const sessionId = state.currentSession?.session_id;
+  const plan = state.currentReportPlan;
+  if (!sessionId || !plan) throw new Error("请先生成 PPT 大纲");
+  const result = await api(`/api/v1/analysis/sessions/${encodeURIComponent(sessionId)}/report-plans/${encodeURIComponent(plan.report_plan_id)}/pages`, { method: "POST" });
+  applyReportPlan(result);
+  renderReportWorkflow();
+}
+
+async function downloadReportPptx() {
+  const sessionId = state.currentSession?.session_id;
+  const plan = state.currentReportPlan;
+  if (!sessionId || !plan) throw new Error("请先完成报告页面确认");
+  syncBackendBase();
+  const path = `/api/v1/analysis/sessions/${encodeURIComponent(sessionId)}/report-plans/${encodeURIComponent(plan.report_plan_id)}/export.pptx`;
+  const response = await fetch(buildApiUrl(state.backendBase, path));
+  if (!response.ok) {
+    let detail = await response.text();
+    try { detail = formatErrorDetail(JSON.parse(detail)?.detail || detail); } catch (_error) { /* keep text */ }
+    throw new Error(`PPTX 导出失败：${detail}`);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = `${String(plan.title || "分析报告").replace(/[\\/:*?\"<>|]/g, "_")}.pptx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  plan.status = "exported";
+  renderReportWorkflow();
+}
+
+async function activateReportPage(pageId) {
+  const sessionId = state.currentSession?.session_id;
+  const plan = state.currentReportPlan;
+  if (!sessionId || !plan || !pageId) return;
+  state.activeReportPageId = pageId;
+  const result = await api(`/api/v1/analysis/sessions/${encodeURIComponent(sessionId)}/report-plans/${encodeURIComponent(plan.report_plan_id)}/pages/${encodeURIComponent(pageId)}/activate`, { method: "POST" });
+  applyReportPlan(result);
+  renderReportWorkflow();
 }
 
 function bindTableWrapWheelScroll() {
@@ -4828,9 +5233,11 @@ function bind() {
   renderSceneFieldsCardCollapse();
   renderSceneRelationsCardCollapse();
   renderIntentTemplates();
-  renderPptSchemeOptions();
+  renderPriceBandDetailsCollapse();
+  renderFieldResolutionCollapse();
+  renderQueryResultCollapse();
   renderSlidePreview(null);
-  loadPptSchemes();
+  renderReportWorkflow();
   el("createSceneBtn").onclick = () => run(() => withButtonBusy("createSceneBtn", "创建中...", createScene));
   el("toggleCreateSceneBtn").onclick = () => {
     state.createSceneCollapsed = !state.createSceneCollapsed;
@@ -4838,9 +5245,57 @@ function bind() {
   };
   if (el("createSessionBtn")) el("createSessionBtn").onclick = () => run(createSession);
   el("runQueryBtn").onclick = () =>
-    run(() => withAgentWait("sqlResult", "SQL 结果 Agent", confirmAndGenerateSqlFromFieldResolution));
+    run(() => withButtonBusy("runQueryBtn", "规划中...", createReportPlanFromIntent));
+  if (el("confirmReportOutlineBtn")) {
+    el("confirmReportOutlineBtn").onclick = () =>
+      run(() => withButtonBusy("confirmReportOutlineBtn", "确认中...", confirmReportOutline));
+  }
+  if (el("reopenReportOutlineBtn")) {
+    el("reopenReportOutlineBtn").onclick = () =>
+      run(() => withButtonBusy("reopenReportOutlineBtn", "切换中...", reopenReportOutline));
+  }
+  if (el("addReportPageBtn")) {
+    el("addReportPageBtn").onclick = () =>
+      run(() => withButtonBusy("addReportPageBtn", "新增中...", addReportPage));
+  }
+  if (el("exportReportPptxBtn")) {
+    el("exportReportPptxBtn").onclick = () =>
+      run(() => withButtonBusy("exportReportPptxBtn", "导出中...", downloadReportPptx));
+  }
+  if (el("reportWorkflowCard")) {
+    el("reportWorkflowCard").addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const pageButton = target?.closest("[data-report-page-id]");
+      if (pageButton?.dataset.reportPageId) {
+        run(() => activateReportPage(pageButton.dataset.reportPageId));
+        return;
+      }
+      const actionButton = target?.closest("[data-report-action]");
+      if (actionButton?.dataset.reportAction) {
+        run(() => withButtonBusy(actionButton.id || "", "处理中...", () => callReportAction(actionButton.dataset.reportAction)));
+      }
+    });
+  }
   if (el("clearFieldResolutionBtn")) {
     el("clearFieldResolutionBtn").onclick = () => resetFieldResolutionState();
+  }
+  if (el("togglePriceBandDetailsBtn")) {
+    el("togglePriceBandDetailsBtn").onclick = () => {
+      state.priceBandDetailsCollapsed = !state.priceBandDetailsCollapsed;
+      renderPriceBandDetailsCollapse();
+    };
+  }
+  if (el("toggleFieldResolutionBtn")) {
+    el("toggleFieldResolutionBtn").onclick = () => {
+      state.fieldResolutionCollapsed = !state.fieldResolutionCollapsed;
+      renderFieldResolutionCollapse();
+    };
+  }
+  if (el("toggleQueryResultBtn")) {
+    el("toggleQueryResultBtn").onclick = () => {
+      state.queryResultCollapsed = !state.queryResultCollapsed;
+      renderQueryResultCollapse();
+    };
   }
   if (el("intentCorrectionList")) {
     el("intentCorrectionList").addEventListener("click", (event) => {
@@ -4911,26 +5366,16 @@ function bind() {
   });
   if (el("loadPlanBtn")) el("loadPlanBtn").onclick = () => run(loadPlan);
   if (el("executeQueryBtn")) el("executeQueryBtn").onclick = () => run(executeQuery);
-  if (el("refreshQueryHistoryBtn")) el("refreshQueryHistoryBtn").onclick = () => run(refreshQueryHistory);
-  if (el("refreshDeliveryHistoryBtn")) {
-    el("refreshDeliveryHistoryBtn").onclick = () => run(async () => {
+  if (el("refreshSessionsBtn")) {
+    el("refreshSessionsBtn").onclick = () => run(async () => {
+      await refreshSessions();
       await refreshQueryHistory();
-      await loadReportStateForCurrentSession({ silent: false });
     });
   }
-  if (el("loadSlideBtn")) el("loadSlideBtn").onclick = () => run(loadSlide);
-  if (el("regenerateSlideBtn")) el("regenerateSlideBtn").onclick = () => run(regenerateSlide);
-  if (el("approveSlideBtn")) el("approveSlideBtn").onclick = () => run(approveSlide);
-  if (el("exportDeckBtn")) el("exportDeckBtn").onclick = () => run(exportDeck);
+  if (el("deckUndoBtn")) el("deckUndoBtn").onclick = () => run(undoDeckRevision);
+  if (el("deckRedoBtn")) el("deckRedoBtn").onclick = () => run(redoDeckRevision);
   if (el("saveSlideEditBtn")) el("saveSlideEditBtn").onclick = () => run(saveSlideEdits);
   if (el("resetSlideEditBtn")) el("resetSlideEditBtn").onclick = () => resetSlideEditor();
-  if (el("pptSchemeSelect")) {
-    el("pptSchemeSelect").onchange = () => {
-      state.pptScheme = getSelectedPptScheme();
-      renderPptSchemeHint();
-      if (state.currentSession) run(loadSlide);
-    };
-  }
   if (el("backendBase")) el("backendBase").addEventListener("change", () => persistUiState());
   if (el("goalInput")) el("goalInput").addEventListener("input", () => persistUiState());
   if (el("queryIntentInput")) {
@@ -5112,7 +5557,7 @@ function bind() {
   el("llmImportBtn").onclick = () => run(applySceneDraftFromLlm);
   if (el("llmSqlResultBtn")) {
     el("llmSqlResultBtn").onclick = () =>
-      run(() => withAgentWait("sqlResult", "SQL 结果 Agent", confirmAndGenerateSqlFromFieldResolution));
+      run(() => withButtonBusy("llmSqlResultBtn", "规划中...", createReportPlanFromIntent));
   }
   ["fieldTableName", "relationLeftTable", "relationRightTable"].forEach((id) => {
     const input = el(id);
@@ -5197,7 +5642,115 @@ function bind() {
     state.clothing.offset += state.clothing.limit;
     await refreshClothingItems({ keepPage: true });
   });
+  el("modelSelect").onchange = onModelSelectChange;
+  el("modelProbeBtn").onclick = probeCurrentModel;
   renderAgentWaitHint();
+}
+
+// ── 模型切换（全项目唯一配置入口，后端 /api/v1/model-selection）──────────────
+// 取向与项目一致：**不兜底、不粉饰**——接口失败就把真实原因显示出来；
+// 「测试」按钮真发一次模型请求，失败就报失败，不假装成功。
+function modelOptionLabel(option) {
+  const label = String(option?.label || option?.id || "");
+  const model = String(option?.model || "");
+  const suffix = model && !label.includes(model) ? ` · ${model}` : "";
+  return `${label}${suffix}`;
+}
+
+function currentModelOption() {
+  const options = Array.isArray(state.modelSelection.options) ? state.modelSelection.options : [];
+  return options.find((item) => String(item?.id || "") === String(state.modelSelection.current || "")) || null;
+}
+
+function renderModelSelection() {
+  const select = el("modelSelect");
+  if (!(select instanceof HTMLSelectElement)) return;
+  const hint = el("modelSwitchHint");
+  const options = Array.isArray(state.modelSelection.options) ? state.modelSelection.options : [];
+  if (!options.length) {
+    select.innerHTML = '<option value="">不可用</option>';
+    select.disabled = true;
+    if (hint) hint.textContent = "未能读取模型清单";
+    return;
+  }
+  select.innerHTML = "";
+  for (const option of options) {
+    const node = document.createElement("option");
+    node.value = String(option?.id || "");
+    node.textContent = modelOptionLabel(option) + (option?.available === false ? "（未配置密钥）" : "");
+    node.disabled = option?.available === false;
+    select.appendChild(node);
+  }
+  select.value = String(state.modelSelection.current || "");
+  select.disabled = false;
+  const current = currentModelOption();
+  if (hint) {
+    hint.textContent =
+      current && current.available === false ? "当前档未配置密钥，调用会失败" : "";
+  }
+}
+
+async function refreshModelSelection() {
+  const payload = await api("/api/v1/model-selection");
+  state.modelSelection = {
+    current: String(payload?.current || ""),
+    options: Array.isArray(payload?.options) ? payload.options : [],
+  };
+  renderModelSelection();
+}
+
+async function switchModel(modelId) {
+  const payload = await api("/api/v1/model-selection", {
+    method: "PUT",
+    body: JSON.stringify({ model_id: modelId }),
+  });
+  state.modelSelection = {
+    current: String(payload?.current || ""),
+    options: Array.isArray(payload?.options) ? payload.options : state.modelSelection.options,
+  };
+  renderModelSelection();
+  const current = currentModelOption();
+  if (el("modelSwitchHint")) {
+    el("modelSwitchHint").textContent = `已切到 ${current ? modelOptionLabel(current) : modelId}（下一轮调用生效）`;
+  }
+}
+
+async function onModelSelectChange() {
+  const select = el("modelSelect");
+  if (!(select instanceof HTMLSelectElement)) return;
+  const target = String(select.value || "");
+  try {
+    await switchModel(target);
+  } catch (error) {
+    // 切换失败要把下拉拨回真实档位，不能让它停在一个没生效的值上。
+    select.value = String(state.modelSelection.current || "");
+    if (el("modelSwitchHint")) {
+      el("modelSwitchHint").textContent = `切换失败：${error?.message || error}`;
+    }
+  }
+}
+
+async function probeCurrentModel() {
+  const button = el("modelProbeBtn");
+  const hint = el("modelSwitchHint");
+  if (button instanceof HTMLButtonElement) button.disabled = true;
+  if (hint) hint.textContent = "正在真实调用当前模型…";
+  try {
+    const result = await api("/api/v1/model-selection/probe", {
+      method: "POST",
+      body: JSON.stringify({ model_id: state.modelSelection.current || null }),
+      timeoutMs: 45000,
+    });
+    if (hint) {
+      hint.textContent = result?.ok
+        ? `✅ 可用：HTTP ${result.http_status} · ${result.latency_ms}ms · 返回「${result.sample || ""}」`
+        : `❌ 不可用：${result?.detail || "未知原因"}`;
+    }
+  } catch (error) {
+    if (hint) hint.textContent = `❌ 测试请求失败：${error?.message || error}`;
+  } finally {
+    if (button instanceof HTMLButtonElement) button.disabled = false;
+  }
 }
 
 async function run(fn) {
@@ -5222,6 +5775,11 @@ async function bootstrap() {
   }
   refreshClothingAll().catch(console.error);
   refreshLlmCacheStatus().catch(console.error);
+  refreshModelSelection().catch((error) => {
+    if (el("modelSwitchHint")) {
+      el("modelSwitchHint").textContent = `模型清单读取失败：${error?.message || error}`;
+    }
+  });
 }
 
 loadStoredUiState();

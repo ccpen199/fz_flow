@@ -6,22 +6,24 @@ cd "$ROOT_DIR"
 export PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}"
 
 PY_BIN="$(command -v python3)"
-if [ -x "$ROOT_DIR/deer-flow/backend/.venv/bin/python" ]; then
-  PY_BIN="$ROOT_DIR/deer-flow/backend/.venv/bin/python"
-elif [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
   PY_BIN="$ROOT_DIR/.venv/bin/python"
+elif [ -x "$ROOT_DIR/deer-flow/backend/.venv/bin/python" ]; then
+  PY_BIN="$ROOT_DIR/deer-flow/backend/.venv/bin/python"
 fi
 
 "$PY_BIN" - <<'PY'
-from pathlib import Path
-from zipfile import ZipFile
-
 from fastapi.testclient import TestClient
 
 from apps.vibe_backend.app.main import app
 import apps.vibe_backend.app.store as store
 
 client = TestClient(app)
+registered_paths = {route.path for route in app.routes}
+assert "/api/v1/decks/{deck_id}/export" not in registered_paths
+assert not any(path.startswith("/api/v1/artifacts") for path in registered_paths)
+assert "/api/v1/decks/{deck_id}/train-ppt-agent-handoff" in registered_paths
+assert "/api/v1/decks/{deck_id}/train-ppt-agent/callback" in registered_paths
 
 scene = client.post("/api/v1/scenes", json={"name": "冒烟测试场景", "description": "smoke"}).json()
 scene_id = scene["scene_id"]
@@ -102,8 +104,17 @@ slide2 = client.post(
     json={"style_hint": "简洁商务风", "structure_hint": "对比页"},
 ).json()
 deck = client.post(f"/api/v1/analysis/sessions/{session_id}/current-slide/approve").json()
-artifact = client.post(f"/api/v1/decks/{deck['deck_id']}/export").json()
-download = client.get(artifact["download_url"])
+handoff = client.get(f"/api/v1/decks/{deck['deck_id']}/train-ppt-agent-handoff").json()
+assert handoff["deck"]["deck_id"] == deck["deck_id"]
+assert handoff["slides"]
+callback = client.post(
+    f"/api/v1/decks/{deck['deck_id']}/train-ppt-agent/callback",
+    json={
+        "base_revision_id": handoff.get("base_revision_id"),
+        "editor_document": handoff["editor_document"],
+        "message": "smoke callback",
+    },
+).json()
 bridge_health = client.get("/api/v1/bridge/deerflow/health").json()
 bridge_skills = client.get("/api/v1/bridge/deerflow/skills").json()
 
@@ -115,14 +126,8 @@ assert len(slide["findings"]) > 0
 assert slide["page_type"] in {"overview", "comparison", "trend", "risk", "summary", "root_cause"}
 assert "chart_type" in slide["chart_spec"]
 assert slide2["version"] >= 2
-assert artifact["artifact_id"]
-assert download.status_code == 200
-artifact_path = Path(artifact["local_path"])
-assert artifact_path.exists()
-with ZipFile(artifact_path, "r") as archive:
-    names = set(archive.namelist())
-assert "ppt/presentation.xml" in names
-assert "ppt/slides/slide1.xml" in names
+assert callback["ok"] is True
+assert callback["deck_revision"]["deck_id"] == deck["deck_id"]
 assert session["deerflow_thread_id"]
 assert thread_context["workspace_ready"] is True
 assert chat_turn["deerflow_thread_id"] == session["deerflow_thread_id"]
@@ -136,7 +141,6 @@ store.QUERY_PLANS.clear()
 store.QUERY_RUNS.clear()
 store.SLIDE_DRAFTS.clear()
 store.DECKS.clear()
-store.ARTIFACTS.clear()
 store.DEERFLOW_CHAT_TURNS.clear()
 store.load_state()
 
@@ -146,7 +150,7 @@ assert len(store.DECKS) >= 1
 assert any(session.deerflow_thread_id for session in store.SESSIONS.values())
 assert any(turns for turns in store.DEERFLOW_CHAT_TURNS.values())
 
-print("SMOKE_OK", deck["deck_id"], artifact["artifact_id"])
+print("SMOKE_OK", deck["deck_id"], callback["deck_revision"]["deck_revision_id"])
 
 bad_scene = client.post("/api/v1/scenes", json={"name": "非法查询场景", "description": "bad"}).json()
 bad_scene_id = bad_scene["scene_id"]

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FZ 智能分析工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20260825-smart-correction" />
+    <link rel="stylesheet" href="./styles.css?v=20260909-report-workflow-v1" />
   </head>
   <body>
     <div class="app-bg"></div>
@@ -35,9 +35,36 @@
           </div>
         </section>
 
+        <section class="panel sidebar-history-panel">
+          <div class="section-head">
+            <h2>会话列表</h2>
+            <button id="refreshSessionsBtn" class="secondary compact-btn" type="button">刷新</button>
+          </div>
+          <div id="sessionsList" class="list sidebar-history-list"></div>
+        </section>
       </aside>
 
       <main class="content">
+        <!-- 对话式分析工作台入口（新版，推荐） -->
+        <a
+          id="agentEntryBanner"
+          class="card"
+          href="./agent.html"
+          style="display:flex;align-items:center;gap:14px;padding:14px 18px;margin-bottom:12px;text-decoration:none;border:1px solid rgba(96,180,255,.5);background:linear-gradient(90deg,rgba(45,140,255,.18),rgba(64,212,200,.10));"
+        >
+          <span style="font-size:22px;line-height:1;">&#10024;</span>
+          <span style="flex:1;min-width:0;">
+            <strong style="display:block;font-size:15px;">新版：对话式分析工作台（推荐）</strong>
+            <span class="muted" style="font-size:12.5px;"
+              >一句话复盘 Zara → 自动出维度卡 → 点选即出图 → 串汇报大纲 → 生成并导出 PPT（右侧画布随对话演进）</span
+            >
+          </span>
+          <span
+            style="padding:8px 16px;border-radius:8px;background:#2d8cff;color:#fff;font-weight:600;white-space:nowrap;"
+            >立即进入 &rarr;</span
+          >
+        </a>
+
         <section id="topbar" class="topbar card meta-hidden">
           <div id="topbarMeta" class="topbar-meta" hidden>
             <h2 id="sessionTitle"></h2>
@@ -51,6 +78,35 @@
               placeholder="数据源 API 地址，例如 http://127.0.0.1:18900"
             />
             <span id="currentSceneHint" class="muted topbar-current-scene"></span>
+            <!-- 模型切换：全项目唯一配置入口；对全部页面/全部链路生效
+                 （配置中心推荐 / SQL 生成 / 对话式画布意图判定）。-->
+            <span
+              id="modelSwitchWrap"
+              style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;"
+            >
+              <span class="muted" style="font-size:12.5px;white-space:nowrap;">模型</span>
+              <select
+                id="modelSelect"
+                title="切换全部链路使用的模型（配置中心推荐 / SQL 生成 / 对话画布）"
+                style="min-width:200px;"
+                disabled
+              >
+                <option value="">加载中…</option>
+              </select>
+              <button
+                id="modelProbeBtn"
+                class="secondary compact-btn"
+                type="button"
+                title="真实调用一次当前模型，如实回报结果（不伪造成功）"
+              >
+                测试
+              </button>
+              <span
+                id="modelSwitchHint"
+                class="muted"
+                style="font-size:12px;max-width:340px;"
+              ></span>
+            </span>
           </div>
         </section>
 
@@ -59,27 +115,18 @@
           <button id="tabBtnConfig" class="tab-btn active" data-tab-target="config" role="tab" aria-selected="true">配置中心</button>
           <button id="tabBtnClothing" class="tab-btn" data-tab-target="clothing" role="tab" aria-selected="false">服装检索</button>
           <button id="tabBtnQuery" class="tab-btn" data-tab-target="query" role="tab" aria-selected="false">查询执行</button>
-          <button id="tabBtnDelivery" class="tab-btn" data-tab-target="delivery" role="tab" aria-selected="false">汇报产物</button>
         </nav>
 
         <section class="tab-panel" data-tab-panel="overview">
           <section class="grid">
-            <article class="card">
+            <article class="card span-2">
               <div class="section-head">
-                <h3>Scenes</h3>
+                <h3>场景列表</h3>
                 <button id="toggleScenesBtnOverview" class="secondary compact-btn">收起</button>
               </div>
               <div id="scenesOverviewWrap">
                 <div id="scenesList" class="list compact-list"></div>
               </div>
-            </article>
-            <article class="card">
-              <h3>Sessions</h3>
-              <div id="sessionsList" class="list"></div>
-            </article>
-            <article class="card span-2">
-              <h3>Bridge / Thread</h3>
-              <pre id="bridgeView" class="json"></pre>
             </article>
           </section>
         </section>
@@ -141,7 +188,7 @@
                   <button id="exportSceneConfigBtn" class="secondary" title="导出当前场景字段、关系和语义配置">导出配置</button>
                   <button id="importSceneConfigBtn" class="secondary" title="从配置文件导入字段、关系和语义配置">导入配置</button>
                   <input id="sceneConfigFileInput" type="file" accept=".json,application/json" hidden />
-                  <button id="llmSqlResultBtn" title="切到查询执行并生成SQL+结果">SQL与结果</button>
+                  <button id="llmSqlResultBtn" title="切到查询执行并生成查询结果与PPT">查询与PPT</button>
                 </div>
               </div>
               <div id="sceneConfigWrap">
@@ -187,10 +234,7 @@
                     <div id="llmCandidateRelationsWrap" class="table-wrap"></div>
                   </section>
                 </div>
-                <details class="debug-details">
-                  <summary>高级信息 / 调试 JSON</summary>
-                  <pre id="sceneConfigView" class="json"></pre>
-                </details>
+                <div hidden aria-hidden="true"><pre id="sceneConfigView"></pre></div>
               </div>
             </article>
             <article class="card span-2 semantic-er-group">
@@ -396,116 +440,82 @@
                   <input id="priceBandBoundariesInput" type="text" placeholder="可选：800,1200,1600" />
                 </label>
                 <div class="query-band-summary">
-                  <p id="priceBandModeHint" class="muted query-band-hint"></p>
-                  <div id="priceBandPolicySummary" class="query-band-summary-text"></div>
+                  <div class="query-band-summary-head">
+                    <button id="togglePriceBandDetailsBtn" class="secondary compact-btn collapse-toggle-btn" type="button" aria-controls="priceBandDetailsWrap" aria-expanded="false" title="展开价格带说明">+</button>
+                    <span class="query-band-summary-title">价格带说明</span>
+                  </div>
+                  <div id="priceBandDetailsWrap" hidden>
+                    <p id="priceBandModeHint" class="muted query-band-hint"></p>
+                    <div id="priceBandPolicySummary" class="query-band-summary-text"></div>
+                  </div>
                 </div>
               </div>
               <div class="actions compact-actions">
-                <button id="runQueryBtn">确认并生成SQL</button>
+                <button id="runQueryBtn">生成 PPT 大纲</button>
               </div>
               <div id="fieldResolutionPanel" class="field-resolution-panel" hidden>
                 <div class="section-head field-resolution-head">
-                  <h4>标准字段识别 / 歧义消解</h4>
+                  <div class="field-resolution-heading">
+                    <button id="toggleFieldResolutionBtn" class="secondary compact-btn collapse-toggle-btn" type="button" aria-controls="fieldResolutionContent" aria-expanded="false" title="展开字段识别结果">+</button>
+                    <h4>标准字段识别 / 歧义消解</h4>
+                  </div>
                   <button id="clearFieldResolutionBtn" class="secondary compact-btn" type="button">清空</button>
                 </div>
-                <p id="fieldResolutionSummary" class="muted field-resolution-summary"></p>
-                <div id="fieldResolutionList" class="field-resolution-list"></div>
-              </div>
-              <p id="querySaveHint" class="muted query-save-hint"></p>
-              <p class="muted">
-                检查三项：FROM/JOIN 是否符合所选关系；SELECT 是否只含已选字段；WHERE 时间与过滤条件是否正确。
-              </p>
-            </article>
-            <article class="card span-2 query-history-card">
-              <div class="section-head">
-                <h3>提问历史</h3>
-                <button id="refreshQueryHistoryBtn" class="secondary compact-btn">刷新</button>
-              </div>
-              <div id="queryHistoryList" class="list query-history-list"></div>
-            </article>
-            <article class="card">
-              <h3>Query Plan（可读）</h3>
-              <pre id="queryPlanView" class="json"></pre>
-            </article>
-            <article class="card">
-              <h3>MySQL SQL & Run</h3>
-              <pre id="queryRunView" class="json"></pre>
-              <div id="queryTableWrap" class="table-wrap"></div>
-            </article>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-tab-panel="delivery">
-          <section class="grid">
-            <article class="card span-2 delivery-history-card">
-              <div class="section-head">
-                <h3>选择提问历史</h3>
-                <button id="refreshDeliveryHistoryBtn" class="secondary compact-btn">刷新</button>
-              </div>
-              <p id="deliverySessionHint" class="muted delivery-session-hint">请选择一条已执行的提问历史后生成汇报产物。</p>
-              <div id="deliveryHistoryList" class="list query-history-list"></div>
-            </article>
-            <article class="card span-2">
-              <div class="section-head">
-                <h3>PPT 导出器</h3>
-                <div class="actions compact-actions">
-                  <select id="pptSchemeSelect" title="选择PPT生成方案">
-                    <optgroup label="AI PPT 生成器">
-                      <option value="presenton_ai">Presenton AI PPT 生成</option>
-                    </optgroup>
-                  </select>
-                  <button id="loadSlideBtn">生成预览</button>
-                  <button id="regenerateSlideBtn" class="secondary">重生成</button>
-                  <button id="approveSlideBtn" class="secondary">批准入Deck</button>
-                  <button id="exportDeckBtn">导出PPT</button>
-                  <a id="downloadArtifactBtn" class="button-link disabled" href="#">下载PPT</a>
+                <div id="fieldResolutionContent" hidden>
+                  <p id="fieldResolutionSummary" class="muted field-resolution-summary"></p>
+                  <div id="fieldResolutionList" class="field-resolution-list"></div>
                 </div>
               </div>
-              <p id="pptSchemeHint" class="muted">调用本地或配置的 Presenton 服务，由大模型生成并导出 PPTX。</p>
-              <p id="deliveryActionHint" class="muted delivery-action-hint"></p>
+            </article>
+            <div class="query-internal-state" hidden aria-hidden="true">
+              <p id="querySaveHint"></p>
+              <pre id="queryPlanView"></pre>
+              <pre id="queryRunView"></pre>
+              <pre id="queryRunInfoView"></pre>
+            </div>
+            <article id="reportWorkflowCard" class="card span-2 report-workflow-card" hidden>
+              <div class="section-head">
+                <div>
+                  <h3>PPT 报告工作流</h3>
+                  <p id="reportWorkflowHint" class="muted">先确认整份 PPT 大纲，再逐页生成并审核数据。</p>
+                </div>
+                <div class="actions compact-actions">
+                  <button id="reopenReportOutlineBtn" class="secondary" type="button" hidden>修改大纲</button>
+                  <button id="addReportPageBtn" class="secondary" type="button">新增页面</button>
+                  <button id="confirmReportOutlineBtn" type="button">确认大纲，进入 SQL</button>
+                  <button id="exportReportPptxBtn" type="button" hidden>导出完整 PPTX</button>
+                </div>
+              </div>
+              <div class="report-stage-flow" aria-label="报告生成阶段">
+                <span data-stage="outline">1. 大纲</span><i></i>
+                <span data-stage="sql">2. SQL</span><i></i>
+                <span data-stage="chart">3. 图表数据</span><i></i>
+                <span data-stage="insight">4. 洞察</span><i></i>
+                <span data-stage="delivery">5. 交付</span>
+              </div>
+              <div class="report-workspace">
+                <nav id="reportPageList" class="report-page-list" aria-label="PPT 页面列表"></nav>
+                <div id="reportPageWorkspace" class="report-page-workspace"></div>
+              </div>
+            </article>
+            <article class="card span-2 query-result-card">
+              <div class="query-output-head">
+                <button id="toggleQueryResultBtn" class="secondary compact-btn collapse-toggle-btn" type="button" aria-controls="queryResultContent" aria-expanded="false" title="展开查询结果">+</button>
+                <h3>查询结果</h3>
+              </div>
+              <div id="queryResultContent" class="query-output-content" hidden>
+                <div id="queryTableWrap" class="table-wrap"></div>
+              </div>
+            </article>
+            <article class="card span-2 query-ppt-card">
+              <div class="section-head">
+                <h3>PPT 产物</h3>
+                <div class="actions compact-actions">
+                  <button id="deckUndoBtn" class="secondary">回撤</button>
+                  <button id="deckRedoBtn" class="secondary">前进</button>
+                </div>
+              </div>
               <div id="slidePreview" class="slide-preview"></div>
-            </article>
-            <article class="card span-2 slide-editor-card">
-              <div class="section-head">
-                <h3>Slide 结构化编辑</h3>
-                <div class="actions compact-actions">
-                  <button id="saveSlideEditBtn">保存编辑</button>
-                  <button id="resetSlideEditBtn" class="secondary">恢复当前稿</button>
-                </div>
-              </div>
-              <p id="slideEditHint" class="muted">生成预览后可编辑标题、结论、说明、建议和图表类型。</p>
-              <div class="slide-edit-grid">
-                <label class="label">标题
-                  <input id="slideTitleInput" placeholder="Slide 标题" />
-                </label>
-                <label class="label">副标题
-                  <input id="slideSubtitleInput" placeholder="Slide 副标题" />
-                </label>
-                <label class="label">图表类型
-                  <select id="slideChartTypeSelect">
-                    <option value="table">table</option>
-                    <option value="bar">bar</option>
-                    <option value="line">line</option>
-                  </select>
-                </label>
-                <label class="label slide-edit-span">核心结论（每行一条）
-                  <textarea id="slideFindingsInput" placeholder="每行一条核心结论"></textarea>
-                </label>
-                <label class="label slide-edit-span">业务解释
-                  <textarea id="slideNarrativeInput" placeholder="业务解释"></textarea>
-                </label>
-                <label class="label slide-edit-span">下一步建议（每行一条）
-                  <textarea id="slideRecommendationsInput" placeholder="每行一条建议"></textarea>
-                </label>
-              </div>
-            </article>
-            <article class="card">
-              <h3>Slide Draft JSON</h3>
-              <pre id="slideView" class="json"></pre>
-            </article>
-            <article class="card">
-              <h3>Deck / Artifact</h3>
-              <pre id="deckView" class="json"></pre>
             </article>
           </section>
         </section>
@@ -522,7 +532,7 @@
         <p><strong>能力总览</strong>：深度调研（网页检索/抓取/总结）、多步任务编排、生成 <code>md/html/代码</code>、线程内上下文记忆、调用搜索/抓取/文件读写/bash。</p>
         <p><strong>推荐操作路线</strong>：先定义目标与交付物 → 再给约束（时间、来源、格式）→ 上传材料 → 要求结构化输出 → 让它继续迭代补差。</p>
         <p><strong>文件上传后怎么分析</strong>：说明文件用途、要抽取的信息、输出格式；例如“读取上传的财报 PDF，抽取收入/毛利/费用/管理层指引，输出中文要点+风险表+3页汇报结构”。</p>
-        <p><strong>如何让它生成网页/报告/代码</strong>：明确目标文件、目录、技术栈、验收标准；例如“生成单文件 HTML 仪表盘，包含图表占位、结论区、下载按钮，并输出到 <code>runtime_data/artifacts/</code>”。</p>
+        <p><strong>如何让它生成网页/报告/代码</strong>：明确目标文件、目录、技术栈、验收标准；例如“生成单文件 HTML 仪表盘，包含图表占位和结论区”。</p>
         <p><strong>可直接复制的提示词</strong></p>
         <pre class="guide-pre">1. 请对某行业做深度调研：检索近12个月一手资料，按市场规模、竞争格局、价格带、关键玩家、风险点输出中文报告，并附来源链接。
 
@@ -639,6 +649,6 @@ note：纤维编码映射到标准纤维字典。</pre>
     <datalist id="fieldNameOptions"></datalist>
     <datalist id="relationLeftFieldOptions"></datalist>
     <datalist id="relationRightFieldOptions"></datalist>
-    <script src="./main.js?v=20260825-smart-correction"></script>
+    <script src="./main.js?v=20261011-modelswitch-v1"></script>
   </body>
 </html>

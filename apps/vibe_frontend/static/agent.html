@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FZ 智能分析工作台 · 对话模式</title>
+    <link rel="stylesheet" href="./agent.css?v=20261028-ppt-workbench-v5" />
+  </head>
+  <body>
+    <div class="agent-shell">
+      <header class="agent-top">
+        <div class="brand">
+          FZ 智能分析工作台
+          <span class="mode-chip">对话模式</span>
+          <!-- 勾选才进 PPT 模式（最右侧第三栏）。放在顶栏的原因：画布可以收成窄条，
+               收窄时它的头部会整块隐藏，勾选框跟着藏起来就没法退出了。
+               也不做"生成完自动跳"——出完 PPT 往往还要在对话里改大纲/换维度/补页。 -->
+          <label class="mode-toggle" title="勾选后在最右侧打开 PPT 工作台：先给主题，再确认大纲，出稿后就是编辑器">
+            <input type="checkbox" id="pptModeCheck" />
+            <span>PPT 模式</span>
+          </label>
+          <span id="sceneChip" class="chip">本轮配置：<b>待定</b></span>
+          <!-- 模型可直接在这里切换。理由：模型是全项目**唯一一处**配置，改一次对三处调用
+               同时生效（配置中心推荐 / SQL 生成 / 对话画布），入口没必要分散；
+               切换**下一轮调用**生效（注册表在调用时解析档位），不需要重启服务。
+               读不到清单就如实显示读不到，不假装有值。 -->
+          <label
+            class="chip model-switch"
+            title="切换全部链路使用的模型（下一轮调用生效，无需重启）"
+          >
+            模型
+            <select id="modelSelect" class="model-select">
+              <option value="">读取中…</option>
+            </select>
+          </label>
+          <span id="modelSwitchHint" class="dim-hint model-switch-hint"></span>
+        </div>
+        <div class="top-right">
+          <select id="convSelect" title="切换会话"></select>
+          <button id="newConvBtn" class="ghost" type="button">新建会话</button>
+          <input id="backendBase" class="backend-input" value="http://127.0.0.1:18900" title="数据源 API 地址" />
+          <a class="ghost-link" href="./index.html">配置后台</a>
+        </div>
+      </header>
+
+      <main class="agent-main" id="agentMain">
+        <section class="pane pane-chat">
+          <div class="pane-head">
+            <span>分析对话</span>
+            <span id="chatMeta" class="muted"></span>
+            <span class="spacer"></span>
+            <button id="reloadConvBtn" class="ghost" type="button">重新载入</button>
+          </div>
+          <div id="messages" class="messages"></div>
+          <div class="composer">
+            <div id="quickChips" class="quick-chips"></div>
+            <textarea id="input" placeholder="例如：最近想复盘一下 Zara，帮我分析看看"></textarea>
+            <div class="composer-actions">
+              <span id="typing" class="typing" hidden>
+                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                <span id="typingText">正在识别意图…</span>
+              </span>
+              <span class="spacer"></span>
+              <button id="sendBtn" type="button">发送</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane pane-canvas" id="canvasPane">
+          <div class="pane-head">
+            <span>动态画布</span>
+            <span id="canvasMeta" class="muted"></span>
+            <span class="spacer"></span>
+            <button id="collapseCanvasBtn" class="ghost" type="button" title="把画布收成窄条，给 PPT 编辑器让位">收起</button>
+            <button id="refreshCanvasBtn" class="ghost" type="button">刷新</button>
+          </div>
+          <div id="canvas" class="canvas"></div>
+          <button id="expandCanvasBtn" class="railtab" type="button" title="展开动态画布">
+            <span class="railtab-text">展开画布</span>
+          </button>
+        </section>
+
+        <section class="pane pane-ppt" id="pptPane" hidden>
+          <div class="pane-head">
+            <span>PPT 工作台</span>
+            <span id="pptMeta" class="muted"></span>
+            <span class="spacer"></span>
+            <!-- PPT 卡不再出现在中间画布里，导出入口跟着搬到这一栏 -->
+            <a id="pptExportLink" class="ghost-link" href="#" target="_blank" hidden>导出 .pptx</a>
+            <button id="pptSyncPullBtn" class="ghost" type="button" title="把编辑器里刚同步过来的改动读回画布">读回</button>
+            <button id="pptReloadBtn" class="ghost" type="button" title="按当前大纲重新生成一份并载入编辑器">重载大纲</button>
+            <button id="pptCloseBtn" class="ghost" type="button">关闭</button>
+          </div>
+
+          <!-- 还没有 PPT 时的起步区：**先让用户给主题**（TrainPPT 的第一步）。
+               勾选「PPT 模式」就该看到它，而不是一片空白的编辑器。 -->
+          <div id="pptSetup" class="ppt-setup" hidden>
+            <h3 class="ppt-setup-title">从主题开始做一份 PPT</h3>
+            <p class="ppt-setup-hint">
+              主题由你定。大纲会拿这个会话里已有的图表和结论作参考，不够的页按主题从
+              当前配置的字段推导出来（标「待取数」），取到真实数据后才进 PPT。
+            </p>
+            <textarea id="pptTopicInput" class="topic-input" rows="2"
+              placeholder="这份 PPT 要讲什么？例如：ZARA 2026 春夏竞品与价格复盘"></textarea>
+            <div class="ppt-setup-row">
+              <label class="ppt-setup-pages">页数
+                <input id="pptPageCount" type="number" min="2" max="12" step="1" value="4" />
+              </label>
+              <span class="spacer"></span>
+              <button id="pptTopicBtn" type="button">生成大纲</button>
+            </div>
+            <div id="pptSetupStatus" class="dim-hint"></div>
+          </div>
+
+          <!-- 大纲已有、还没确认/还没出稿：这一栏也能确认，不用折回中间的画布。 -->
+          <div id="pptOutlineBar" class="ppt-outline-bar" hidden>
+            <div class="ppt-outline-row">
+              <span class="ppt-outline-label">当前主题</span>
+              <b id="pptOutlineTopic" class="ppt-outline-topic"></b>
+            </div>
+            <div id="pptOutlineHint" class="dim-hint"></div>
+            <div class="ppt-outline-actions">
+              <button id="pptChangeTopicBtn" class="ghost" type="button">改主题重搭</button>
+              <span class="spacer"></span>
+              <button id="pptConfirmBtn" type="button">确认大纲，生成 PPT</button>
+            </div>
+          </div>
+
+          <iframe id="pptFrame" class="ppt-frame" title="TrainPPTAgent 编辑器"></iframe>
+        </section>
+      </main>
+    </div>
+
+    <script src="./vendor/echarts.min.js?v=20260916-m7"></script>
+    <script src="./agent.js?v=20261028-ppt-workbench-v5"></script>
+  </body>
+</html>

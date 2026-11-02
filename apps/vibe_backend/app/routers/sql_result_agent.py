@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -11,14 +12,32 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from ..services.scene_cache_service import scene_cache_service
+from ..services.presentation_workflow_service import presentation_workflow_service
 from ..services.runtime_persistence_service import runtime_persistence_service
 from ..services.sql_result_agent_service import SqlResultAgentService
-from ..store import QUERY_PLANS, QUERY_RUNS, SESSIONS, persist_state
+from ..services.slide_service import build_slide_from_query
+from ..store import DECKS, QUERY_PLANS, QUERY_RUNS, SESSIONS, SLIDE_DRAFTS, persist_state
 from packages.analysis_domain.models import AnalysisSession
-from packages.shared_contracts.python_models import QueryPlanDTO, QueryRunDTO, SessionStatus
+from packages.shared_contracts.python_models import DeckDTO, QueryPlanDTO, QueryRunDTO, SessionStatus
 
 router = APIRouter(prefix="/api/v1/sql-result-agent", tags=["sql-result-agent"])
 service = SqlResultAgentService()
+
+
+def _ensure_presentation_deck(session: AnalysisSession) -> DeckDTO:
+    deck_id = session.deck_id or f"deck_{uuid4().hex[:10]}"
+    session.deck_id = deck_id
+    deck = DECKS.get(deck_id)
+    if deck is None:
+        deck = DeckDTO(
+            deck_id=deck_id,
+            session_id=session.session_id,
+            title=f"Deck for {session.global_goal[:30]}",
+            slide_ids=[],
+            status="building",
+        )
+        DECKS[deck_id] = deck
+    return deck
 
 
 class GenerateSqlResultRequest(BaseModel):
@@ -180,6 +199,7 @@ def _latest_query_run_for_session(session_id: str) -> QueryRunDTO | None:
     if query_plan_payload:
         query_plan = QueryPlanDTO.model_validate(query_plan_payload)
         QUERY_PLANS[session_id] = query_plan
+        QUERY_PLANS[query_plan.query_plan_id] = query_plan
     if query_run_payload:
         query_run = QueryRunDTO.model_validate(query_run_payload)
         QUERY_RUNS[query_run.query_id] = query_run
@@ -300,6 +320,7 @@ async def list_query_history(scene_id: str | None = None) -> dict:
             continue
         if query_plan is not None:
             QUERY_PLANS[session.session_id] = query_plan
+            QUERY_PLANS[query_plan.query_plan_id] = query_plan
         QUERY_RUNS[query_run.query_id] = query_run
         seen_session_ids.add(session.session_id)
         entries.append(
@@ -346,8 +367,13 @@ async def generate_and_run_sql_result(session_id: str, body: GenerateSqlResultRe
 
     query_plan = result.get("query_plan")
     query_run = result.get("query_run")
+    deck = None
+    deck_revision = None
+    slide = None
+    deck_error = ""
     if query_plan is not None:
         QUERY_PLANS[session_id] = query_plan
+        QUERY_PLANS[query_plan.query_plan_id] = query_plan
     if query_run is not None:
         QUERY_RUNS[query_run.query_id] = query_run
         try:
@@ -358,7 +384,35 @@ async def generate_and_run_sql_result(session_id: str, body: GenerateSqlResultRe
             )
         except Exception as exc:  # noqa: BLE001
             mysql_save = {"ok": False, "reason": str(exc)}
-        session.status = SessionStatus.SUMMARIZING_RESULT if query_run.status == "succeeded" else SessionStatus.FAILED
+        if query_run.status == "succeeded":
+            try:
+                session.status = SessionStatus.UPDATING_DECK
+                deck = _ensure_presentation_deck(session)
+                slide = build_slide_from_query(
+                    session_id=session_id,
+                    global_goal=intent,
+                    status=session.status,
+                    query_plan=query_plan,
+                    query_run=query_run,
+                )
+                SLIDE_DRAFTS[slide.slide_id] = slide
+                SLIDE_DRAFTS[session_id] = slide
+                deck_revision = presentation_workflow_service.append_slide(
+                    deck=deck,
+                    slide=slide,
+                    turn_id=None,
+                    change_summary=f"新增分析页面：{intent[:120]}",
+                )
+                DECKS[deck.deck_id] = deck
+                session.status = SessionStatus.SUMMARIZING_RESULT
+            except Exception as exc:  # noqa: BLE001
+                deck_error = str(exc).strip() or exc.__class__.__name__
+                deck = None
+                deck_revision = None
+                slide = None
+                session.status = SessionStatus.SUMMARIZING_RESULT
+        else:
+            session.status = SessionStatus.FAILED
         session.updated_at = datetime.now(UTC)
     persist_state()
 
@@ -376,6 +430,10 @@ async def generate_and_run_sql_result(session_id: str, body: GenerateSqlResultRe
         "value_resolution": result.get("value_resolution", []),
         "query_plan": query_plan.model_dump(mode="json") if query_plan is not None else None,
         "query_run": query_run.model_dump(mode="json") if query_run is not None else None,
+        "deck": deck.model_dump(mode="json") if deck is not None else None,
+        "deck_revision": deck_revision.model_dump(mode="json") if deck_revision is not None else None,
+        "current_slide": slide.model_dump(mode="json") if slide is not None else None,
+        "deck_error": deck_error or None,
         "saved": query_run is not None,
         "persistence": {
             "file_state": query_run is not None,
@@ -408,6 +466,7 @@ async def get_latest_sql_result(session_id: str) -> dict:
         if query_plan_payload:
             query_plan = QueryPlanDTO.model_validate(query_plan_payload)
             QUERY_PLANS[session_id] = query_plan
+            QUERY_PLANS[query_plan.query_plan_id] = query_plan
         if query_run_payload:
             query_run = QueryRunDTO.model_validate(query_run_payload)
             session = _recover_session_from_query_result(query_plan, query_run)

@@ -23,12 +23,24 @@ build/
 # Local runtime
 runtime_data/logs/
 runtime_data/pids/
+runtime_data/screenshots/
+runtime_data/report_exports/
+runtime_data/snapshots/
+runtime_data/model_registry.json
+runtime_data/artifacts/
+runtime_data/backend_state/
 runtime_data/presenton/tmp/
 runtime_data/presenton/app_data/fastembed_cache/
 runtime_data/presenton/app_data/userConfig.json
 runtime_data/presenton/app_data/*.db
 data/*remote*
 data/*tunnel*
+data/*.pid
+data/*.out
+
+# Local-only notes and scratch workspaces
+.workbuddy/
+fz_workflow_agora_tasks/
 
 # Local handoff archives
 handoff/

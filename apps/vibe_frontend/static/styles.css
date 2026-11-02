@@ -534,6 +534,42 @@ select {
   gap: 6px;
 }
 
+.query-band-summary-head,
+.query-explanation-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.query-band-summary-title,
+.query-explanation-head span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+#priceBandDetailsWrap {
+  display: grid;
+  gap: 6px;
+}
+
+#priceBandDetailsWrap[hidden],
+#fieldResolutionContent[hidden],
+#queryExecutionInfo[hidden] {
+  display: none !important;
+}
+
+.collapse-toggle-btn {
+  display: inline-grid;
+  width: 26px;
+  min-width: 26px;
+  min-height: 24px;
+  padding: 0;
+  place-items: center;
+  font-size: 16px;
+  line-height: 1;
+}
+
 .query-band-hint {
   margin: 0;
   align-self: start;
@@ -1110,14 +1146,6 @@ select {
   padding-right: 4px;
 }
 
-.query-history-card {
-  min-height: 130px;
-}
-
-.delivery-history-card {
-  min-height: 140px;
-}
-
 .delivery-session-hint {
   min-height: 18px;
 }
@@ -1133,8 +1161,54 @@ select {
   padding-right: 4px;
 }
 
+.sidebar-history-panel {
+  min-height: 160px;
+}
+
+.sidebar-history-list {
+  max-height: min(42vh, 420px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .query-save-hint {
   min-height: 18px;
+}
+
+.query-output-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.query-output-head h3,
+.query-output-head h4 {
+  margin: 0;
+}
+
+.query-output-content {
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.query-output-content[hidden] {
+  display: none !important;
+}
+
+.query-explanation-panel {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+#queryExecutionInfo {
+  display: grid;
+  gap: 6px;
+}
+
+#queryExecutionInfo p {
+  margin: 0;
 }
 
 .field-resolution-panel {
@@ -1155,9 +1229,20 @@ select {
   color: #dff8f5;
 }
 
+.field-resolution-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .field-resolution-summary {
   margin: 0 0 8px;
   font-size: 12px;
+}
+
+#fieldResolutionContent {
+  display: grid;
 }
 
 .field-resolution-list {
@@ -1314,9 +1399,9 @@ select {
 
 .history-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) 70px 42px;
+  gap: 6px;
+  align-items: center;
 }
 
 .history-row.active .list-item {
@@ -1324,19 +1409,60 @@ select {
   background: linear-gradient(180deg, rgba(19, 59, 84, 0.94), rgba(12, 43, 62, 0.94));
 }
 
-.history-main-btn {
-  width: 100%;
+.history-row.active .history-meta {
+  border-color: var(--accent);
 }
 
-.history-main-btn strong,
-.history-main-btn span {
+.history-main-btn {
+  width: 100%;
+  min-width: 0;
+}
+
+.history-title {
   display: block;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow-wrap: anywhere;
+}
+
+.history-meta {
+  display: grid;
+  min-width: 0;
+  min-height: 64px;
+  align-content: center;
+  justify-items: center;
+  gap: 2px;
+  padding: 5px 3px;
+  overflow: hidden;
+  border: 1px solid rgba(95, 145, 191, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 27, 45, 0.72);
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.history-meta time,
+.history-status {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-status {
+  color: #c9d9eb;
+  font-size: 10px;
 }
 
 .history-delete-btn {
-  align-self: stretch;
-  min-height: 34px;
-  padding: 4px 8px;
+  align-self: center;
+  min-width: 42px;
+  min-height: 30px;
+  padding: 4px 5px;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(171, 84, 96, 0.74);
   background: linear-gradient(180deg, #8e3c3c, #6e2f2f);
@@ -1474,6 +1600,157 @@ select {
   background: linear-gradient(180deg, rgba(8, 22, 38, 0.72), rgba(7, 19, 33, 0.72));
 }
 
+.slide-preview-visual {
+  width: 100%;
+  min-height: 360px;
+  padding: clamp(20px, 3vw, 42px);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.ppt-slide-title-block {
+  margin: 0 0 24px;
+  padding-bottom: 14px;
+  border-bottom: 2px solid #e5edf7;
+}
+
+.ppt-slide-title-block h4 {
+  margin: 0;
+  color: #14213d;
+  font-size: clamp(20px, 2.15vw, 32px);
+  line-height: 1.25;
+}
+
+.ppt-slide-title-block p {
+  margin: 8px 0 0;
+  color: #607086;
+  font-size: clamp(12px, 1.1vw, 16px);
+}
+
+.ppt-insight {
+  margin-top: 22px;
+  padding: 12px 16px;
+  border-left: 4px solid #2877e3;
+  background: #f4f8fd;
+  color: #26364a;
+  font-size: clamp(12px, 1.1vw, 16px);
+  line-height: 1.55;
+}
+
+.ppt-insight ul { margin: 0; padding-left: 18px; }
+.ppt-insight p { margin: 8px 0 0; }
+
+.ppt-line-chart { width: 100%; overflow: hidden; }
+.ppt-line-chart svg { display: block; width: 100%; height: auto; min-height: 220px; }
+.ppt-axis { stroke: #cfdae8; stroke-width: 1; }
+.ppt-line-path { fill: none; stroke: #2877e3; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.ppt-area-fill { fill: rgba(40, 119, 227, 0.17); }
+.ppt-line-dot { fill: #2877e3; stroke: #fff; stroke-width: 2; }
+.ppt-line-label { fill: #5b6b82; font-size: 12px; }
+
+.ppt-pie-layout { display: grid; grid-template-columns: minmax(180px, 0.85fr) minmax(220px, 1.15fr); gap: 30px; align-items: center; max-width: 800px; margin: 0 auto; }
+.ppt-pie { width: min(30vw, 260px); aspect-ratio: 1; justify-self: center; border-radius: 50%; box-shadow: 0 6px 16px rgba(36, 58, 91, 0.14); }
+.ppt-pie.ring { position: relative; }
+.ppt-pie.ring::after { position: absolute; inset: 28%; border-radius: 50%; background: #fff; content: ""; }
+.ppt-pie-legend { display: grid; gap: 9px; }
+.ppt-pie-legend div { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px; align-items: center; color: #334155; font-size: 13px; }
+.ppt-pie-legend i { width: 10px; height: 10px; border-radius: 50%; }
+.ppt-pie-legend span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ppt-pie-legend strong { color: #172033; }
+
+.ppt-table-wrap { overflow: auto; max-height: 300px; }
+.ppt-table { width: 100%; border-collapse: collapse; color: #25364b; font-size: 13px; }
+.ppt-table th, .ppt-table td { padding: 9px 10px; border: 1px solid #dbe5f0; text-align: left; }
+.ppt-table th { background: #edf4fc; color: #1a4f94; }
+
+.report-workflow-card { overflow: visible; }
+.report-stage-flow { display: flex; align-items: center; gap: 8px; margin: 16px 0; overflow-x: auto; padding-bottom: 3px; }
+.report-stage-flow span { flex: 0 0 auto; border: 1px solid rgba(95, 145, 191, 0.35); border-radius: 999px; padding: 6px 10px; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.report-stage-flow span.active { color: #fff; border-color: var(--accent); background: var(--accent); }
+.report-stage-flow span.done { color: #bddcff; border-color: rgba(74, 157, 242, 0.65); background: rgba(34, 104, 181, 0.35); }
+.report-stage-flow i { display: block; flex: 1 0 16px; min-width: 16px; height: 1px; background: rgba(95, 145, 191, 0.3); }
+
+.report-workspace { display: grid; grid-template-columns: minmax(190px, 0.52fr) minmax(0, 1.48fr); gap: 16px; min-height: 340px; }
+.report-page-list { display: grid; align-content: start; gap: 8px; max-height: 720px; overflow: auto; padding-right: 4px; }
+.report-page-item { width: 100%; border: 1px solid rgba(95, 145, 191, 0.3); border-radius: 9px; padding: 10px; color: var(--text-primary); text-align: left; background: rgba(8, 27, 46, 0.55); cursor: pointer; }
+.report-page-item:hover, .report-page-item.active { border-color: var(--accent); background: rgba(22, 78, 128, 0.45); }
+.report-page-item small { display: block; margin-bottom: 3px; color: #8faecb; }
+.report-page-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.report-page-item em { display: inline-block; margin-top: 6px; color: #a6c6e8; font-size: 11px; font-style: normal; }
+.report-page-workspace { min-width: 0; border: 1px solid rgba(95, 145, 191, 0.28); border-radius: 10px; padding: 16px; background: rgba(7, 24, 42, 0.55); }
+.report-page-workspace h4 { margin: 0; font-size: 17px; }
+.report-page-workspace > p { margin: 5px 0 14px; }
+.report-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.report-form-grid label { display: grid; gap: 5px; color: var(--text-muted); font-size: 12px; }
+.report-form-grid input, .report-form-grid select, .report-form-grid textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.report-form-grid .wide { grid-column: 1 / -1; }
+.report-page-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.report-page-stage { display: inline-block; margin-left: 7px; padding: 3px 7px; border-radius: 999px; background: rgba(51, 119, 184, 0.24); color: #bcdaf8; font-size: 11px; vertical-align: middle; }
+.report-sql-editor { width: 100%; min-height: 160px; margin-top: 14px; box-sizing: border-box; font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
+.report-insight-editor { width: 100%; min-height: 105px; margin-top: 14px; box-sizing: border-box; }
+.report-inline-note { margin: 14px 0 0; padding: 10px; border-radius: 8px; background: rgba(47, 119, 210, 0.14); color: #c9e0f7; font-size: 13px; line-height: 1.55; }
+
+@media (max-width: 850px) {
+  .report-workspace { grid-template-columns: 1fr; }
+  .report-page-list { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); max-height: none; }
+  .ppt-pie-layout { grid-template-columns: 1fr; gap: 18px; }
+  .ppt-pie { width: min(58vw, 240px); }
+}
+
+@media (max-width: 600px) {
+  .report-form-grid { grid-template-columns: 1fr; }
+  .report-form-grid .wide { grid-column: auto; }
+}
+
+.ppt-chart {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  color: #182433;
+}
+
+.ppt-chart-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.9fr) minmax(180px, 3fr) minmax(42px, auto);
+  gap: 12px;
+  align-items: center;
+}
+
+.ppt-chart-label {
+  overflow: hidden;
+  color: #334155;
+  font-size: clamp(11px, 1.1vw, 15px);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ppt-chart-track {
+  display: block;
+  height: clamp(15px, 2vw, 24px);
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6edf5;
+}
+
+.ppt-chart-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2877e3, #4ba5ff);
+  box-shadow: 0 2px 4px rgba(40, 119, 227, 0.24);
+}
+
+.ppt-chart-value {
+  min-width: 36px;
+  color: #172033;
+  font-size: clamp(12px, 1.15vw, 16px);
+  text-align: right;
+}
+
 .slide-preview-empty {
   color: var(--text-muted);
   font-size: 13px;
@@ -1533,6 +1810,10 @@ select {
   gap: 12px;
 }
 
+.slide-preview-body.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .slide-preview-section {
   min-width: 0;
 }
@@ -1560,6 +1841,26 @@ select {
   padding: 10px;
   background: rgba(6, 20, 34, 0.62);
   overflow: auto;
+}
+
+.slide-preview-chart-summary {
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.slide-preview-chart-summary strong {
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.slide-preview-chart-summary p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .slide-preview-chart table {
@@ -1602,14 +1903,6 @@ select {
 
 .slide-edit-span {
   grid-column: span 3;
-}
-
-.compact-actions select#pptSchemeSelect {
-  width: 260px;
-  min-height: 30px;
-  margin-bottom: 0;
-  padding: 4px 8px;
-  font-size: 12px;
 }
 
 .compact-actions select.compact-select {
@@ -1707,6 +2000,10 @@ button:disabled {
   border-radius: 10px;
   border: 1px solid rgba(95, 145, 191, 0.34);
   overscroll-behavior: contain;
+}
+
+.query-result-card .table-wrap {
+  max-height: min(56vh, 520px);
 }
 
 .playbook-list-wrap {
@@ -2397,6 +2694,10 @@ button:disabled {
     grid-column: span 3;
   }
 
+  .sidebar-history-list {
+    max-height: 260px;
+  }
+
   .topbar {
     grid-template-columns: 1fr;
   }
@@ -2473,9 +2774,6 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .compact-actions select#pptSchemeSelect {
-    width: 100%;
-  }
 }
 
 /* Final hard override for list widths: always fill the container and keep columns equal. */
